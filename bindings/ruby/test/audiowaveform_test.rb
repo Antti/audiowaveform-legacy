@@ -91,6 +91,13 @@ class AudioWaveformTest < Minitest::Test
     )
     assert_operator scaled.data.map(&:abs).max, :<, waveform.data.map(&:abs).max
 
+    string_scaled = AudioWaveform.generate(
+      fixture("test_file_mono.wav"),
+      pixels_per_second: 100,
+      amplitude_scale: "0.5"
+    )
+    assert_equal scaled.data, string_scaled.data
+
     assert_equal waveform.data, AudioWaveform.generate(
       fixture("test_file_mono.wav"),
       pixels_per_second: 100,
@@ -173,6 +180,12 @@ class AudioWaveformTest < Minitest::Test
     end
     assert_raises(ArgumentError) do
       AudioWaveform.generate(input, amplitude_scale: Float::INFINITY)
+    end
+    assert_raises(ArgumentError) do
+      AudioWaveform.generate(input, amplitude_scale: -0.5)
+    end
+    assert_raises(ArgumentError) do
+      AudioWaveform.generate(input, amplitude_scale: "loud")
     end
     assert_raises(TypeError) do
       AudioWaveform.generate(nil)
