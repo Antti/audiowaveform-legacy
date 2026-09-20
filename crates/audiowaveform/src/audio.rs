@@ -1,8 +1,8 @@
 #[cfg(feature = "decode")]
 use std::fs::File;
-use std::io::Read;
 #[cfg(feature = "decode")]
-use std::io::Seek;
+use std::io::SeekFrom;
+use std::io::{Read, Seek};
 #[cfg(feature = "decode")]
 use std::path::Path;
 
@@ -26,6 +26,9 @@ use symphonia::default::{get_codecs, get_probe};
 #[cfg(feature = "decode")]
 use crate::AudioFormat;
 use crate::{AmplitudeScale, Error, Waveform, WaveformPoint};
+
+mod peaks;
+use peaks::{PeakAccumulator, needs_frame_count};
 
 #[cfg(feature = "decode")]
 struct ReadSeekMediaSource<R> {
@@ -349,116 +352,48 @@ pub fn generate_waveform_from_pcm(
     pcm: &PcmAudio,
     options: &GenerateOptions,
 ) -> Result<Waveform, Error> {
-    let samples_per_pixel = options.scale.resolve(pcm.sample_rate, pcm.frame_count())?;
-    let output_channels = if options.split_channels {
-        pcm.channels
-    } else {
-        1
-    };
-    let mut waveform = Waveform::new(pcm.sample_rate, samples_per_pixel, output_channels)?;
-
-    if let ScaleSpec::Points(points) = options.scale {
-        generate_exact_points(pcm, points, &mut waveform)?;
-        waveform.set_source_frames(pcm.frame_count() as u64)?;
-        return match options.amplitude_scale {
-            Some(scale) => waveform.scale_amplitude(scale),
-            None => Ok(waveform),
-        };
-    }
-
-    let channels = usize::from(pcm.channels);
-    let output_channels_usize = usize::from(output_channels);
-    let mut mins = vec![i16::MAX; output_channels_usize];
-    let mut maxs = vec![i16::MIN; output_channels_usize];
-    let mut count = 0_u32;
-
-    for frame in pcm.samples.chunks_exact(channels) {
-        if output_channels == 1 {
-            let sample = frame.iter().map(|value| i32::from(*value)).sum::<i32>() / channels as i32;
-            mins[0] = mins[0].min(sample as i16);
-            maxs[0] = maxs[0].max(sample as i16);
-        } else {
-            for (channel, sample) in frame.iter().enumerate() {
-                mins[channel] = mins[channel].min(*sample);
-                maxs[channel] = maxs[channel].max(*sample);
-            }
-        }
-
-        count += 1;
-        if count == samples_per_pixel {
-            flush_frame(&mut waveform, &mins, &maxs)?;
-            mins.fill(i16::MAX);
-            maxs.fill(i16::MIN);
-            count = 0;
-        }
-    }
-
-    if count > 0 {
-        flush_frame(&mut waveform, &mins, &maxs)?;
-    }
-
-    match options.amplitude_scale {
-        Some(scale) => waveform.scale_amplitude(scale),
-        None => Ok(waveform),
-    }
-}
-
-fn generate_exact_points(
-    pcm: &PcmAudio,
-    points: u32,
-    waveform: &mut Waveform,
-) -> Result<(), Error> {
-    let frames = pcm.frame_count();
-    if frames == 0 {
-        return Ok(());
-    }
-    let channels = usize::from(pcm.channels);
-    let mut mins = vec![i16::MAX; usize::from(waveform.channels())];
-    let mut maxs = vec![i16::MIN; usize::from(waveform.channels())];
-
-    for index in 0..u128::from(points) {
-        // Integer boundaries partition every source frame exactly once when downsampling.
-        // Empty buckets repeat their source frame when more points than frames are requested.
-        let start = (index * frames as u128 / u128::from(points)) as usize;
-        let end = (((index + 1) * frames as u128 / u128::from(points)) as usize).max(start + 1);
-        mins.fill(i16::MAX);
-        maxs.fill(i16::MIN);
-        for frame in pcm.samples[start * channels..end * channels].chunks_exact(channels) {
-            if waveform.channels() == 1 {
-                let sample = (frame.iter().map(|&value| i64::from(value)).sum::<i64>()
-                    / channels as i64) as i16;
-                mins[0] = mins[0].min(sample);
-                maxs[0] = maxs[0].max(sample);
-            } else {
-                for (channel, &sample) in frame.iter().enumerate() {
-                    mins[channel] = mins[channel].min(sample);
-                    maxs[channel] = maxs[channel].max(sample);
-                }
-            }
-        }
-        flush_frame(waveform, &mins, &maxs)?;
-    }
-    Ok(())
+    let mut peaks =
+        PeakAccumulator::new(pcm.sample_rate, pcm.channels, pcm.frame_count(), options)?;
+    peaks.push(&pcm.samples)?;
+    peaks.finish(options)
 }
 
 /// Generates a waveform from raw audio bytes.
+/// Fixed scales consume bounded blocks directly. Scales requiring the total
+/// frame count spool the input to a temporary file, then aggregate in a second pass.
 pub fn generate_waveform_from_raw_reader<R: Read>(
     mut reader: R,
     config: &RawAudioConfig,
     options: &GenerateOptions,
 ) -> Result<Waveform, Error> {
-    let pcm = decode_raw_audio_reader(&mut reader, config)?;
-    generate_waveform_from_pcm(&pcm, options)
+    RawAudioConfig::new(config.sample_rate, config.channels, config.sample_format)?;
+    if needs_frame_count(options.scale) {
+        // The public raw-reader API accepts pipes. Spool bytes to disk so an
+        // unknown length never forces the entire PCM stream into memory.
+        let mut spool = tempfile::tempfile()?;
+        let bytes = std::io::copy(&mut reader, &mut spool)?;
+        let frame_width = usize::from(config.channels) * raw_sample_width(config.sample_format);
+        let frames = usize::try_from(bytes / frame_width as u64)
+            .map_err(|_| Error::invalid_data("Audio frame count is too large"))?;
+        spool.rewind()?;
+        generate_raw_stream(&mut spool, config, options, frames)
+    } else {
+        generate_raw_stream(&mut reader, config, options, 0)
+    }
 }
 
 /// Decodes raw audio bytes into interleaved 16-bit PCM.
+/// This explicitly retains the entire decoded recording in memory.
 pub fn decode_raw_audio_reader<R: Read>(
     mut reader: R,
     config: &RawAudioConfig,
 ) -> Result<PcmAudio, Error> {
-    let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes)?;
-    parse_raw_audio(&bytes, config)
+    let mut samples = Vec::new();
+    visit_raw_samples(&mut reader, config, |block| {
+        samples.extend_from_slice(block);
+        Ok(())
+    })?;
+    PcmAudio::new(config.sample_rate, config.channels, samples)
 }
 
 /// Generates a waveform from an audio file path using Symphonia.
@@ -495,17 +430,63 @@ pub fn decode_audio_from_path(path: impl AsRef<Path>) -> Result<PcmAudio, Error>
 }
 
 /// Generates a waveform from an arbitrary seekable audio reader using Symphonia.
+/// Aggregates decoded packets without retaining the full PCM recording. Exact
+/// point counts and full-clip `FitWidth` decode twice: first to count frames,
+/// then to aggregate. Other scales decode once. The reader must remain unchanged
+/// between passes. Memory includes decoder/container state and the waveform output.
 #[cfg(feature = "decode")]
 pub fn generate_waveform_from_reader<R: Read + Seek + Send + Sync + 'static>(
     reader: R,
     format_hint: Option<AudioFormat>,
     options: &GenerateOptions,
 ) -> Result<Waveform, Error> {
-    let pcm = decode_audio_from_reader(reader, format_hint)?;
-    generate_waveform_from_pcm(&pcm, options)
+    let mut reader = reader;
+    let count_frames = needs_frame_count(options.scale);
+    let start = if count_frames {
+        reader.stream_position()?
+    } else {
+        0
+    };
+    let mut source = media_source_stream(reader);
+    let expected = if count_frames {
+        let (info, returned_source) = decode_audio_stream(source, format_hint, |_, _, _| Ok(()))?;
+        source = returned_source;
+        source.seek(SeekFrom::Start(start))?;
+        Some(info)
+    } else {
+        None
+    };
+
+    let mut peaks = None;
+    let (info, _) = decode_audio_stream(source, format_hint, |sample_rate, channels, samples| {
+        if peaks.is_none() {
+            peaks = Some(PeakAccumulator::new(
+                sample_rate,
+                channels,
+                expected.map_or(0, |info| info.frames),
+                options,
+            )?);
+        }
+        peaks
+            .as_mut()
+            .expect("initialized accumulator")
+            .push(samples)
+    })?;
+    if expected.is_some_and(|expected| expected != info) {
+        return Err(Error::invalid_data(
+            "Audio stream changed between decoding passes",
+        ));
+    }
+    let peaks = match peaks {
+        Some(peaks) => peaks,
+        None => PeakAccumulator::new(info.sample_rate, info.channels, info.frames, options)?,
+    };
+    peaks.finish(options)
 }
 
 /// Decodes an arbitrary seekable audio reader into interleaved 16-bit PCM using Symphonia.
+/// This explicitly retains the entire decoded recording in memory. Use
+/// `generate_waveform_from_reader` when only waveform peaks are needed.
 #[cfg(feature = "decode")]
 pub fn decode_audio_from_reader<R: Read + Seek + Send + Sync + 'static>(
     reader: R,
@@ -526,19 +507,65 @@ fn flush_frame(waveform: &mut Waveform, mins: &[i16], maxs: &[i16]) -> Result<()
     waveform.push_frame(&points)
 }
 
-fn parse_raw_audio(bytes: &[u8], config: &RawAudioConfig) -> Result<PcmAudio, Error> {
+fn generate_raw_stream(
+    reader: &mut impl Read,
+    config: &RawAudioConfig,
+    options: &GenerateOptions,
+    frames: usize,
+) -> Result<Waveform, Error> {
+    let mut peaks = PeakAccumulator::new(config.sample_rate, config.channels, frames, options)?;
+    visit_raw_samples(reader, config, |samples| peaks.push(samples))?;
+    peaks.finish(options)
+}
+
+fn visit_raw_samples(
+    reader: &mut impl Read,
+    config: &RawAudioConfig,
+    mut visit: impl FnMut(&[i16]) -> Result<(), Error>,
+) -> Result<(), Error> {
+    RawAudioConfig::new(config.sample_rate, config.channels, config.sample_format)?;
     let width = raw_sample_width(config.sample_format);
-    if !bytes.len().is_multiple_of(width) {
+    let frame_width = width * usize::from(config.channels);
+    let mut bytes = vec![0; frame_width * (16_384 / usize::from(config.channels)).max(1)];
+    let mut samples = Vec::with_capacity(bytes.len() / width);
+    let mut buffered = 0;
+    loop {
+        let count = match reader.read(&mut bytes[buffered..]) {
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if count == 0 {
+            break;
+        }
+        let available = buffered + count;
+        let complete = available / frame_width * frame_width;
+        samples.clear();
+        samples.extend(
+            bytes[..complete]
+                .chunks_exact(width)
+                .map(|sample| parse_raw_sample(sample, config.sample_format)),
+        );
+        visit(&samples)?;
+        bytes.copy_within(complete..available, 0);
+        buffered = available - complete;
+    }
+    if !buffered.is_multiple_of(width) {
         return Err(Error::invalid_data(
             "Raw audio byte length is not aligned to the sample format",
         ));
     }
-
-    let mut samples = Vec::with_capacity(bytes.len() / width);
-    for chunk in bytes.chunks_exact(width) {
-        samples.push(parse_raw_sample(chunk, config.sample_format));
+    if buffered != 0 {
+        return Err(Error::invalid_argument(
+            "samples",
+            "Interleaved PCM sample count must be divisible by the channel count",
+        ));
     }
-    PcmAudio::new(config.sample_rate, config.channels, samples)
+    Ok(())
+}
+
+#[cfg(test)]
+fn parse_raw_audio(bytes: &[u8], config: &RawAudioConfig) -> Result<PcmAudio, Error> {
+    decode_raw_audio_reader(bytes, config)
 }
 
 fn raw_sample_width(format: RawSampleFormat) -> usize {
@@ -600,24 +627,52 @@ fn clamp_float_to_i16(value: f64) -> i16 {
 
 #[cfg(feature = "decode")]
 pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
-    mut reader: R,
+    reader: R,
     format_hint: Option<AudioFormat>,
 ) -> Result<PcmAudio, Error> {
+    let mut samples = Vec::new();
+    let (info, _) =
+        decode_audio_stream(media_source_stream(reader), format_hint, |_, _, block| {
+            samples.extend_from_slice(block);
+            Ok(())
+        })?;
+    PcmAudio::new(info.sample_rate, info.channels, samples)
+}
+
+#[cfg(feature = "decode")]
+fn media_source_stream<R: Read + Seek + Send + Sync + 'static>(mut reader: R) -> MediaSourceStream {
+    let byte_len = reader.stream_position().ok().and_then(|position| {
+        let len = reader.seek(SeekFrom::End(0)).ok();
+        let _ = reader.seek(SeekFrom::Start(position));
+        len
+    });
+    MediaSourceStream::new(
+        Box::new(ReadSeekMediaSource::new(reader, byte_len)),
+        Default::default(),
+    )
+}
+
+#[cfg(feature = "decode")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DecodedInfo {
+    sample_rate: u32,
+    channels: u16,
+    frames: usize,
+}
+
+/// Decode one packet at a time. Returning the underlying stream lets a counting
+/// pass restart probing from the beginning, even for formats without demuxer seeking.
+#[cfg(feature = "decode")]
+fn decode_audio_stream(
+    source: MediaSourceStream,
+    format_hint: Option<AudioFormat>,
+    mut visit: impl FnMut(u32, u16, &[i16]) -> Result<(), Error>,
+) -> Result<(DecodedInfo, MediaSourceStream), Error> {
     let mut hint = Hint::new();
     if let Some(format) = format_hint {
         format.ensure_enabled()?;
         hint.with_extension(format.as_str());
     }
-
-    let byte_len = reader.stream_position().ok().and_then(|position| {
-        let len = reader.seek(std::io::SeekFrom::End(0)).ok();
-        let _ = reader.seek(std::io::SeekFrom::Start(position));
-        len
-    });
-    let source = MediaSourceStream::new(
-        Box::new(ReadSeekMediaSource::new(reader, byte_len)),
-        Default::default(),
-    );
     let probed = get_probe().format(
         &hint,
         source,
@@ -649,10 +704,12 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
     let mut channels = codec_params
         .channels
         .map(|channels| channels.count() as u16);
-    let encoder_delay = codec_params.delay.unwrap_or(0) as usize;
+    let mut delay_remaining = codec_params.delay.unwrap_or(0) as usize;
     let mut decoder = get_codecs().make(&codec_params, &DecoderOptions::default())?;
 
     let mut samples = Vec::new();
+    let mut saw_frames = false;
+    let mut frames = 0_usize;
     loop {
         let packet = match format.next_packet() {
             Ok(packet) => packet,
@@ -681,9 +738,12 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
 
         let spec = decoded.spec();
         let decoded_channels = spec.channels.count() as u16;
-        if !samples.is_empty()
-            && (sample_rate != Some(spec.rate) || channels != Some(decoded_channels))
-        {
+        if spec.rate == 0 || decoded_channels == 0 {
+            return Err(Error::invalid_data(
+                "Invalid decoded audio sample rate or channel count",
+            ));
+        }
+        if saw_frames && (sample_rate != Some(spec.rate) || channels != Some(decoded_channels)) {
             return Err(Error::invalid_data(
                 "Audio stream changes sample rate or channel count",
             ));
@@ -692,6 +752,8 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
         sample_rate = Some(spec.rate);
         channels = Some(decoded_channels);
 
+        saw_frames |= decoded.frames() > 0;
+        samples.clear();
         match decoded {
             AudioBufferRef::F32(buffer) => {
                 extend_interleaved_f32_samples(buffer.as_ref(), &mut samples);
@@ -706,22 +768,39 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
                 samples.extend_from_slice(sample_buffer.samples());
             }
         }
+        let block_frames = samples.len() / usize::from(decoded_channels);
+        let skip = delay_remaining.min(block_frames);
+        delay_remaining -= skip;
+        let samples = &samples[skip * usize::from(decoded_channels)..];
+        frames = frames
+            .checked_add(block_frames - skip)
+            .ok_or_else(|| Error::invalid_data("Audio frame count is too large"))?;
+        if !samples.is_empty() {
+            visit(
+                sample_rate.expect("decoded sample rate"),
+                decoded_channels,
+                samples,
+            )?;
+        }
     }
 
     let sample_rate = sample_rate.ok_or(Error::MissingMetadata {
         name: "sample_rate",
     })?;
     let channels = channels.ok_or(Error::MissingMetadata { name: "channels" })?;
-    if encoder_delay > 0 {
-        let samples_to_skip = encoder_delay.saturating_mul(usize::from(channels));
-        if samples_to_skip < samples.len() {
-            samples.drain(..samples_to_skip);
-        } else {
-            samples.clear();
-        }
+    if sample_rate == 0 || channels == 0 {
+        return Err(Error::invalid_data(
+            "Invalid decoded audio sample rate or channel count",
+        ));
     }
-
-    PcmAudio::new(sample_rate, channels, samples)
+    Ok((
+        DecodedInfo {
+            sample_rate,
+            channels,
+            frames,
+        },
+        format.into_inner(),
+    ))
 }
 
 #[cfg(feature = "decode")]

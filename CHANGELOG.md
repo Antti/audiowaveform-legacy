@@ -6,6 +6,10 @@ are kept here as release history context.
 
 ## Unreleased
 
+- Generate waveform peaks incrementally without buffering the complete decoded
+  recording. Exact point counts use a counting pass followed by aggregation.
+- Stream raw PCM pipes at fixed scales and use temporary files when input must
+  be replayed, including encoded CLI stdin and named pipes.
 - Add exact-count PCM waveform generation with `ScaleSpec::Points`, preserving
   decoded duration in JSON and using fractional point spacing when rendering.
 - Expose direct 8-bit or 16-bit waveform values with `Waveform::data`.

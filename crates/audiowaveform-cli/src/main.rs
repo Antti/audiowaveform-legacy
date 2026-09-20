@@ -1,4 +1,3 @@
-#[cfg(any(feature = "render", feature = "wav-output"))]
 use std::fs::File;
 #[cfg(any(feature = "render", feature = "wav-output"))]
 use std::io::Write;
@@ -745,22 +744,54 @@ fn generate_waveform_from_input(
     raw: Option<&RawAudioConfig>,
     options: GenerateOptions,
 ) -> Result<Waveform, String> {
-    let bytes = read_input_bytes(filename)?;
-    match format {
-        CliFormat::Raw => generate_waveform_from_raw_reader(
-            Cursor::new(bytes),
+    if format == CliFormat::Raw {
+        let mut reader: Box<dyn Read> = if is_stdio_filename(filename) {
+            Box::new(io::stdin().lock())
+        } else {
+            Box::new(
+                File::open(filename.expect("checked stdio")).map_err(|error| error.to_string())?,
+            )
+        };
+        return generate_waveform_from_raw_reader(
+            &mut reader,
             raw.expect("validated raw config"),
             &options,
         )
-        .map_err(stringify_error),
-        #[cfg(feature = "decode")]
-        _ => generate_waveform_from_reader(Cursor::new(bytes), format.as_audio_format(), &options)
-            .map_err(stringify_error),
-        #[cfg(not(feature = "decode"))]
-        _ => Err(stringify_error(Error::FeatureDisabled {
-            feature: "decode",
-        })),
+        .map_err(stringify_error);
     }
+    #[cfg(feature = "decode")]
+    {
+        use std::io::Seek;
+        let file = if is_stdio_filename(filename) {
+            spool_audio_input(&mut io::stdin().lock())?
+        } else {
+            let mut file =
+                File::open(filename.expect("checked stdio")).map_err(|error| error.to_string())?;
+            if file.stream_position().is_ok() {
+                file
+            } else {
+                // A filename can also refer to a FIFO or process substitution.
+                spool_audio_input(&mut file)?
+            }
+        };
+        generate_waveform_from_reader(file, format.as_audio_format(), &options)
+            .map_err(stringify_error)
+    }
+    #[cfg(not(feature = "decode"))]
+    Err(stringify_error(Error::FeatureDisabled {
+        feature: "decode",
+    }))
+}
+
+#[cfg(feature = "decode")]
+fn spool_audio_input(reader: &mut impl Read) -> Result<File, String> {
+    // Container probing and exact-count generation need a seekable input.
+    // Keep non-seekable encoded input on disk instead of accumulating it in a Vec.
+    use std::io::Seek;
+    let mut spool = tempfile::tempfile().map_err(|error| error.to_string())?;
+    io::copy(reader, &mut spool).map_err(|error| error.to_string())?;
+    spool.rewind().map_err(|error| error.to_string())?;
+    Ok(spool)
 }
 
 fn load_waveform_input(filename: Option<&str>, format: CliFormat) -> Result<Waveform, String> {

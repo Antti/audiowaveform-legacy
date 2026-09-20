@@ -1,5 +1,13 @@
 # Ruby Gem Version History
 
+## Unreleased
+
+### Fixed
+
+- Keep waveform generation from retaining the entire decoded recording in RAM.
+  Fixed scales aggregate decoded blocks in one pass; `points:` counts frames
+  and aggregates in two passes, including files with missing duration metadata.
+
 ## 0.2.0 - 2026-09-20
 
 ### Added

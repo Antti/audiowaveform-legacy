@@ -552,3 +552,29 @@ fn generates_waveforms_from_m4a_paths_and_mp4_stdin() {
             .stdout(path_output);
     }
 }
+
+#[cfg(all(unix, feature = "format-m4a"))]
+#[test]
+fn reads_encoded_pipes_passed_as_filenames() {
+    let bytes = read_fixture("formats/stereo.m4a");
+    let options = ["-q", "--input-format", "m4a", "--output-format", "json"];
+    let expected = Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(options)
+        .write_stdin(bytes.clone())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // /dev/stdin is an opened pipe here, exercising the same path as a FIFO
+    // or shell process substitution without an external mkfifo dependency.
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(options)
+        .args(["-i", "/dev/stdin"])
+        .write_stdin(bytes)
+        .assert()
+        .success()
+        .stdout(expected);
+}

@@ -149,6 +149,18 @@ only a nominal integer scale. JSON preserves exact timing via `source_frames`;
 DAT export rejects scales it cannot represent. Exact-point waveforms must be
 regenerated from audio rather than appended to or resampled.
 
+Waveform generation aggregates decoded blocks without retaining the full PCM
+recording. Fixed scales use one decoding pass; exact point counts and full-clip
+`FitWidth` use two passes to count actual frames and then aggregate peaks. This
+keeps PCM working memory bounded even when duration metadata is absent. Total
+memory also includes decoder/container state and the output waveform. Explicit
+`decode_audio_*` APIs still return an entire in-memory PCM buffer.
+
+Raw readers accept pipes: fixed scales stream directly, while scales needing a
+total frame count spool input to a temporary file. CLI waveform generation reads
+audio files directly and spools encoded stdin or named pipes to a temporary file
+for seeking. Seekable input must remain unchanged between decoding passes.
+
 ## Ruby Usage
 
 Install the `audiowaveform` gem from RubyGems and generate waveform

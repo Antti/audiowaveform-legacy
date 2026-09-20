@@ -111,6 +111,14 @@ requested count; clips with fewer frames than points repeat source samples.
 Empty clips return an empty waveform with zero duration. The duration reflects
 decoded audio, including any untrimmed AAC encoder delay or padding.
 
+Generation processes decoded blocks incrementally instead of retaining the
+entire PCM recording. `points:` uses two decoding passes over the same file:
+one to count actual frames, then one to accumulate peaks. This bounds PCM
+working memory independently of recording length, at the cost of decoding
+twice. Keep the input file unchanged during generation. Fixed-scale options
+decode once; their output grows with the number of waveform points. Decoder
+and container metadata can also consume memory.
+
 `data(bits: 8)` returns values in -128..127, identical to the `data` array in
 `to_json(bits: 8)`, without serializing or parsing JSON. Conversion divides by 256
 and truncates toward zero. `data` still defaults to 16-bit values; neither form
