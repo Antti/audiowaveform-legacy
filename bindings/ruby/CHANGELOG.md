@@ -1,5 +1,15 @@
 # Ruby Gem Version History
 
+## Unreleased
+
+- Add `AudioWaveform.generate(..., points: 110)` for an exact point count without
+  duration metadata. Preserve decoded duration, repeat samples for very short
+  clips, and leave empty clips empty.
+- Add `waveform.data(bits: 8)` with the same values as 8-bit JSON output, without
+  serialization. Calling `data` without arguments still returns 16-bit values.
+- Preserve exact-point timing in JSON via `source_frames`; reject DAT export
+  when its integer scale cannot represent that timing.
+
 ## 0.1.0 - 2026-09-20
 
 ### Added

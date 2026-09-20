@@ -8,6 +8,7 @@ module AudioWaveform
     path input,
     ?samples_per_pixel: Integer?,
     ?pixels_per_second: Integer?,
+    ?points: Integer?,
     ?split_channels: bool,
     ?amplitude_scale: (Numeric | :auto | String)?
   ) -> Waveform
@@ -23,7 +24,7 @@ module AudioWaveform
     def empty?: () -> bool
     def duration: () -> Float
     def duration_seconds: () -> Float
-    def data: () -> Array[Integer]
+    def data: (?bits: Integer) -> Array[Integer]
     def point: (Integer index, ?channel: Integer) -> [Integer, Integer]
     def save: (path path, ?format: (String | Symbol)?, ?bits: Integer) -> self
     def to_dat: (?bits: Integer) -> String

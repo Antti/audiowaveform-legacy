@@ -36,6 +36,76 @@ class AudioWaveformTest < Minitest::Test
     assert_equal waveform.length * waveform.channels * 2, waveform.data.length
   end
 
+  def test_generates_an_exact_point_count_from_decoded_frames
+    waveform = AudioWaveform.generate(fixture("formats/stereo.wav"), points: 110)
+    assert_equal 110, waveform.length
+    assert_equal 220, waveform.data.length
+    assert_equal 0.25, waveform.duration
+    assert_equal 12_000, JSON.parse(waveform.to_json).fetch("source_frames")
+
+    split = AudioWaveform.generate(fixture("formats/stereo.wav"), points: 110, split_channels: true)
+    assert_equal 110, split.length
+    assert_equal 440, split.data.length
+
+    # Fragmented MP4 can omit track duration; generation uses decoded frames.
+    fragmented = AudioWaveform.generate(fixture("formats/fragmented.mp4"), points: 110)
+    assert_equal 110, fragmented.length
+    assert_operator fragmented.duration, :>, 0
+
+    scaled = AudioWaveform.generate(fixture("formats/stereo.wav"), points: 110, amplitude_scale: 0.5)
+    assert_equal waveform.data.map { |value| (value * 0.5).truncate }, scaled.data
+    assert_equal waveform.duration, scaled.duration
+  end
+
+  def test_point_counts_for_empty_and_very_short_audio
+    Dir.mktmpdir do |directory|
+      path = File.join(directory, "short.wav")
+      [0, 1, 3].each do |frames|
+        write_silence_wav(path, frame_count: frames)
+        waveform = AudioWaveform.generate(path, points: 110)
+        assert_equal(frames.zero? ? 0 : 110, waveform.length)
+        assert_equal frames / 16_000.0, waveform.duration
+      end
+    end
+  end
+
+  def test_direct_bit_output_matches_json_and_leaves_internal_values_unchanged
+    waveform = AudioWaveform.generate(fixture("test_file_stereo.wav"), points: 110, split_channels: true)
+    original = waveform.data
+    [8, 16].each do |bits|
+      assert_equal JSON.parse(waveform.to_json(bits: bits)).fetch("data"), waveform.data(bits: bits)
+    end
+    assert waveform.data(bits: 8).all? { |value| value.between?(-128, 127) }
+    assert_equal original, waveform.data
+    assert_equal 16, waveform.bits
+    copy = waveform.data(bits: 16)
+    copy[0] = 123_456
+    assert_equal original, waveform.data
+    [nil, false, "8", 8.0, 0, 12, 256].each do |bits|
+      assert_raises(ArgumentError) { waveform.data(bits: bits) }
+    end
+  end
+
+  def test_point_count_validation_and_serialization
+    path = fixture("formats/stereo.wav")
+    [0, -1, 1.5, false, "110", 2**32].each do |points|
+      assert_raises(ArgumentError) { AudioWaveform.generate(path, points: points) }
+    end
+    [{samples_per_pixel: 256}, {pixels_per_second: 100}].each do |scale|
+      assert_raises(ArgumentError) { AudioWaveform.generate(path, points: 110, **scale) }
+    end
+    assert_equal AudioWaveform.generate(path).data, AudioWaveform.generate(path, points: nil).data
+    assert_raises(ArgumentError) { AudioWaveform.generate(path, points: 110).to_dat }
+    Dir.mktmpdir do |directory|
+      output = File.join(directory, "existing.dat")
+      File.write(output, "keep existing output")
+      assert_raises(ArgumentError) { AudioWaveform.generate(path, points: 110).save(output) }
+      assert_equal "keep existing output", File.read(output)
+    end
+    assert_kind_of String, AudioWaveform.generate(path, points: 100).to_dat
+    assert_equal 110, AudioWaveform.generate(path, points: 110).to_txt.lines.length
+  end
+
   def test_generates_from_each_documented_compressed_format
     %w[
       test_file_stereo.mp3 test_file_stereo.flac test_file_stereo.oga

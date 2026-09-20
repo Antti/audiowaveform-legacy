@@ -24,6 +24,77 @@ use self::support::read_fixture;
 #[cfg(feature = "render")]
 use self::support::{assert_png_bytes_match_fixture, assert_png_file_matches_fixture};
 
+const EXACT_POINT_JSON: &str = r#"{"version":2,"channels":1,"sample_rate":48000,"samples_per_pixel":3,"bits":16,"length":3,"data":[-100,5,-200,100,-300,200],"source_frames":11}"#;
+
+#[test]
+fn rejects_unrepresentable_exact_point_dat_without_truncating_the_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.dat");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "--input-format", "json", "-o"])
+        .arg(&output)
+        .write_stdin(EXACT_POINT_JSON)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("DAT cannot represent"));
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "--input-format", "json", "--output-format", "dat"])
+        .write_stdin(EXACT_POINT_JSON)
+        .assert()
+        .failure()
+        .stdout("");
+}
+
+#[cfg(feature = "render")]
+#[test]
+fn renders_exact_point_json_without_requesting_resampling() {
+    let output = Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args([
+            "-q",
+            "--input-format",
+            "json",
+            "--output-format",
+            "png",
+            "-w",
+            "3",
+            "-h",
+            "40",
+            "--no-axis-labels",
+        ])
+        .write_stdin(EXACT_POINT_JSON)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let image = image::load_from_memory(&output).unwrap();
+    assert_eq!((image.width(), image.height()), (3, 40));
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args([
+            "-q",
+            "--input-format",
+            "json",
+            "--output-format",
+            "png",
+            "--zoom",
+            "256",
+        ])
+        .write_stdin(EXACT_POINT_JSON)
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "Exact point counts require generation from audio",
+        ));
+}
+
 #[test]
 fn prints_help_and_version() {
     Command::cargo_bin("audiowaveform")

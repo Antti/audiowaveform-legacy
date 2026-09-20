@@ -22,10 +22,11 @@ module AudioWaveform
       input,
       samples_per_pixel: nil,
       pixels_per_second: nil,
+      points: nil,
       split_channels: false,
       amplitude_scale: nil
     )
-      scale_kind, scale_value = resolve_scale(samples_per_pixel, pixels_per_second)
+      scale_kind, scale_value = resolve_scale(samples_per_pixel, pixels_per_second, points)
       amplitude_kind, amplitude_value = resolve_amplitude_scale(amplitude_scale)
 
       Native.generate(
@@ -40,9 +41,16 @@ module AudioWaveform
 
     private
 
-    def resolve_scale(samples_per_pixel, pixels_per_second)
-      if samples_per_pixel && pixels_per_second
-        raise ArgumentError, "samples_per_pixel and pixels_per_second are mutually exclusive"
+    def resolve_scale(samples_per_pixel, pixels_per_second, points)
+      if [samples_per_pixel, pixels_per_second, points].count { |value| !value.nil? } > 1
+        raise ArgumentError, "samples_per_pixel, pixels_per_second, and points are mutually exclusive"
+      end
+
+      unless points.nil?
+        value = positive_integer(points, :points)
+        raise ArgumentError, "points must be at most 4294967295" if value > 0xffff_ffff
+
+        return ["points", value]
       end
 
       if pixels_per_second
@@ -83,6 +91,11 @@ module AudioWaveform
     alias bits storage_bits
     alias duration_seconds duration
 
+    # Returns interleaved [minimum, maximum, ...] values at 8 or 16 bits.
+    def data(bits: 16)
+      __data(validate_bits(bits))
+    end
+
     # Returns the [minimum, maximum] pair at +index+ for +channel+.
     def point(index, channel: 0)
       unless index.is_a?(Integer) && index.between?(0, length - 1) &&
@@ -121,7 +134,7 @@ module AudioWaveform
     private
 
     def validate_bits(bits)
-      return bits if bits == 8 || bits == 16
+      return bits if bits.is_a?(Integer) && (bits == 8 || bits == 16)
 
       raise ArgumentError, "bits must be either 8 or 16"
     end

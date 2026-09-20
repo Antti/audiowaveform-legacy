@@ -37,6 +37,7 @@ pub struct Waveform {
     channels: u16,
     storage_bits: u8,
     data: Vec<i16>,
+    source_frames: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +49,7 @@ struct JsonWaveform {
     bits: u8,
     length: usize,
     data: Vec<i32>,
+    source_frames: Option<u64>,
 }
 
 impl Waveform {
@@ -68,6 +70,7 @@ impl Waveform {
             channels,
             storage_bits: 16,
             data: Vec::new(),
+            source_frames: None,
         })
     }
 
@@ -93,6 +96,7 @@ impl Waveform {
             channels,
             storage_bits,
             data,
+            source_frames: None,
         })
     }
 
@@ -132,6 +136,17 @@ impl Waveform {
         path: impl AsRef<Path>,
         format: Option<WaveformFormat>,
     ) -> Result<(), Error> {
+        self.write_to_path(path, format, None)
+    }
+
+    /// Writes to a path with an optional bit depth, inferring the format when omitted.
+    /// Invalid output settings are rejected before creating or truncating the file.
+    pub fn write_to_path(
+        &self,
+        path: impl AsRef<Path>,
+        format: Option<WaveformFormat>,
+        bits: Option<u8>,
+    ) -> Result<(), Error> {
         let path = path.as_ref();
         let resolved = format
             .or_else(|| WaveformFormat::from_path(path))
@@ -142,8 +157,12 @@ impl Waveform {
                     .unwrap_or_default()
                     .to_string(),
             })?;
-        let file = File::create(path)?;
-        self.write_to_writer(BufWriter::new(file), resolved, None)
+        let bits = bits.unwrap_or(self.storage_bits);
+        self.validate_output(resolved, bits)?;
+        let mut writer = BufWriter::new(File::create(path)?);
+        self.write_to_writer(&mut writer, resolved, Some(bits))?;
+        writer.flush()?;
+        Ok(())
     }
 
     /// Writes the waveform to an arbitrary writer.
@@ -154,7 +173,7 @@ impl Waveform {
         bits: Option<u8>,
     ) -> Result<(), Error> {
         let bits = bits.unwrap_or(self.storage_bits);
-        Self::validate_storage_bits(bits)?;
+        self.validate_output(format, bits)?;
         match format {
             WaveformFormat::Dat => self.write_dat(writer, bits),
             WaveformFormat::Json => self.write_json(writer, bits),
@@ -167,9 +186,37 @@ impl Waveform {
         self.sample_rate
     }
 
-    /// Returns the number of source samples represented by each waveform point.
+    /// Returns the nominal integer number of source samples per waveform point.
+    /// For exact point counts this is rounded down with a minimum of 2;
+    /// use `samples_per_point` or `duration_seconds` for timing.
     pub const fn samples_per_pixel(&self) -> u32 {
         self.samples_per_pixel
+    }
+
+    /// Returns the average source frames per point, including fractional scales.
+    pub fn samples_per_point(&self) -> f64 {
+        match self.source_frames {
+            Some(frames) if !self.is_empty() => frames as f64 / self.len() as f64,
+            _ => f64::from(self.samples_per_pixel),
+        }
+    }
+
+    /// Returns the decoded frame count retained by exact-point generation, if available.
+    pub const fn source_frames(&self) -> Option<u64> {
+        self.source_frames
+    }
+
+    pub(crate) fn set_source_frames(&mut self, frames: u64) -> Result<(), Error> {
+        if (frames == 0) != self.is_empty()
+            || (!self.is_empty()
+                && (frames / self.len() as u64).max(2) != u64::from(self.samples_per_pixel))
+        {
+            return Err(Error::invalid_data(
+                "Invalid source_frames for waveform length and scale",
+            ));
+        }
+        self.source_frames = Some(frames);
+        Ok(())
     }
 
     /// Returns the number of waveform channels.
@@ -194,11 +241,20 @@ impl Waveform {
 
     /// Returns the duration represented by the waveform in seconds.
     pub fn duration_seconds(&self) -> f64 {
-        self.len() as f64 * self.samples_per_pixel as f64 / self.sample_rate as f64
+        self.source_frames.map_or_else(
+            || self.len() as f64 * self.samples_per_pixel as f64,
+            |frames| frames as f64,
+        ) / self.sample_rate as f64
     }
 
     /// Appends a frame containing one point per channel.
     pub fn push_frame(&mut self, points: &[WaveformPoint]) -> Result<(), Error> {
+        if self.source_frames.is_some() {
+            return Err(Error::invalid_argument(
+                "points",
+                "Cannot append to an exact-point waveform; regenerate from audio",
+            ));
+        }
         if points.len() != usize::from(self.channels) {
             return Err(Error::invalid_argument(
                 "points",
@@ -231,6 +287,19 @@ impl Waveform {
     /// Returns the interleaved internal min/max data.
     pub fn interleaved_samples(&self) -> &[i16] {
         &self.data
+    }
+
+    /// Returns interleaved min/max values at the requested bit depth (8 or 16).
+    ///
+    /// Eight-bit values use the same conversion as DAT, JSON, and text output:
+    /// divide by 256, truncating toward zero. The internal samples are unchanged.
+    pub fn data(&self, bits: u8) -> Result<Vec<i16>, Error> {
+        Self::validate_storage_bits(bits)?;
+        Ok(self
+            .data
+            .iter()
+            .map(|&value| if bits == 8 { value / 256 } else { value })
+            .collect())
     }
 
     /// Returns the heap allocation size of the sample buffer, including unused capacity.
@@ -305,7 +374,15 @@ impl Waveform {
     ///
     /// The resulting waveform always has the same sample rate and channel count
     /// as the original.
+    /// Exact-point waveforms and `ScaleSpec::Points` must be regenerated from audio
+    /// rather than resampled: their bucket boundaries are not a fixed integer scale.
     pub fn resample(&self, scale: ScaleSpec) -> Result<Self, Error> {
+        if self.source_frames.is_some() || matches!(scale, ScaleSpec::Points(_)) {
+            return Err(Error::invalid_argument(
+                "scale",
+                "Exact point counts require generation from audio, not waveform resampling",
+            ));
+        }
         let total_frames = self.len() * self.samples_per_pixel as usize;
         let output_samples_per_pixel = scale.resolve(self.sample_rate, total_frames)?;
         if output_samples_per_pixel == self.samples_per_pixel {
@@ -513,13 +590,32 @@ impl Waveform {
             }
         }
 
-        Self::from_interleaved_samples(
+        let mut waveform = Self::from_interleaved_samples(
             json.sample_rate,
             json.samples_per_pixel,
             channels,
             data,
             json.bits,
-        )
+        )?;
+        if let Some(frames) = json.source_frames {
+            waveform.set_source_frames(frames)?;
+        }
+        Ok(waveform)
+    }
+
+    fn validate_output(&self, format: WaveformFormat, bits: u8) -> Result<(), Error> {
+        Self::validate_storage_bits(bits)?;
+        if format == WaveformFormat::Dat
+            && self.source_frames.is_some_and(|frames| {
+                u128::from(frames) != self.len() as u128 * u128::from(self.samples_per_pixel)
+            })
+        {
+            return Err(Error::invalid_argument(
+                "format",
+                "DAT cannot represent this exact point count's timing; use JSON or raw data",
+            ));
+        }
+        Ok(())
     }
 
     fn write_dat<W: Write>(&self, mut writer: W, bits: u8) -> Result<(), Error> {
@@ -580,7 +676,11 @@ impl Waveform {
             let serialized = if bits == 8 { value / 256 } else { *value };
             write!(writer, "{serialized}")?;
         }
-        writer.write_all(b"]}\n")?;
+        writer.write_all(b"]")?;
+        if let Some(frames) = self.source_frames {
+            write!(writer, ",\"source_frames\":{frames}")?;
+        }
+        writer.write_all(b"}\n")?;
         Ok(())
     }
 }

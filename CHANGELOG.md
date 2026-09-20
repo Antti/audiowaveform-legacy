@@ -6,6 +6,11 @@ are kept here as release history context.
 
 ## Unreleased
 
+- Add exact-count PCM waveform generation with `ScaleSpec::Points`, preserving
+  decoded duration in JSON and using fractional point spacing when rendering.
+- Expose direct 8-bit or 16-bit waveform values with `Waveform::data`.
+- Render exact-point JSON directly in the CLI and reject incompatible DAT exports
+  before creating or truncating the output file.
 - Make the Rust library minimal by default, with opt-in `format-*`, `render`,
   and `wav-output` features and an `all-formats` input bundle.
 - Enable every supported input format, PNG rendering, and WAV output by default

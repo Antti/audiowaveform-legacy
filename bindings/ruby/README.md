@@ -54,6 +54,7 @@ waveform.data              # => interleaved [min, max, ...] samples
 | --- | --- | --- |
 | `samples_per_pixel` | `256` | Number of source samples represented by each waveform point. Must be at least 2. |
 | `pixels_per_second` | none | Time-based scale. Cannot be combined with `samples_per_pixel`. |
+| `points` | none | Exact number of min/max pairs per channel for nonempty audio. Positive integer; mutually exclusive with the other scale options. |
 | `split_channels` | `false` | Preserve separate audio channels instead of mixing them down. |
 | `amplitude_scale` | none | Non-negative numeric multiplier, or `:auto` to normalize automatically. |
 
@@ -62,13 +63,13 @@ The returned `AudioWaveform::Waveform` exposes:
 | Method | Result |
 | --- | --- |
 | `sample_rate` | Source sample rate in hertz. |
-| `samples_per_pixel` | Source samples represented by each waveform point. |
+| `samples_per_pixel` | Nominal source samples per point. With `points:`, rounded down with a minimum of 2; use `duration / length` for point timing. |
 | `channels` | Number of waveform channels. |
-| `storage_bits` / `bits` | Internal sample resolution, either 8 or 16. |
+| `storage_bits` / `bits` | Preferred serialization resolution, either 8 or 16. Internal values remain 16-bit. |
 | `length` / `size` | Number of waveform points per channel. |
 | `empty?` | Whether the waveform contains no points. |
-| `duration` / `duration_seconds` | Approximate duration in seconds. |
-| `data` | Interleaved minimum and maximum sample values. |
+| `duration` / `duration_seconds` | Duration in seconds. Exact decoded duration with `points:`, otherwise approximate. |
+| `data(bits: 16)` | Interleaved minimum and maximum values, at 8 or 16 bits. |
 | `point(index, channel: 0)` | `[minimum, maximum]` pair for one point and channel. |
 
 Save the generated waveform as binary DAT, JSON, or text:
@@ -94,6 +95,34 @@ is more convenient:
 ```ruby
 waveform = AudioWaveform.generate("recording.flac", pixels_per_second: 100)
 ```
+
+For a fixed number of display points, generate directly from the decoded audio:
+
+```ruby
+waveform = AudioWaveform.generate("recording.m4a", points: 110)
+peaks = waveform.data(bits: 8) # 220 signed integers: [min, max, ...]
+seconds_per_point = waveform.duration / waveform.length unless waveform.empty?
+```
+
+`points:` uses the actual decoded frame count, so container duration metadata is
+not required. Each bucket retains the minimum and maximum of its samples, after
+mixing to mono unless `split_channels: true`. Nonempty clips always produce the
+requested count; clips with fewer frames than points repeat source samples.
+Empty clips return an empty waveform with zero duration. The duration reflects
+decoded audio, including any untrimmed AAC encoder delay or padding.
+
+`data(bits: 8)` returns values in -128..127, identical to the `data` array in
+`to_json(bits: 8)`, without serializing or parsing JSON. Conversion divides by 256
+and truncates toward zero. `data` still defaults to 16-bit values; neither form
+changes the waveform or its preferred serialization bit depth.
+
+Exact-point JSON includes an optional `source_frames` field to retain precise
+timing. Consumers should use `source_frames / sample_rate` for duration when it
+is present, and divide by `length` for point spacing. The legacy integer
+`samples_per_pixel` is only an approximation in that case. DAT has no fractional
+scale field, so DAT export raises `ArgumentError` if the point spacing cannot be
+represented as an integer of at least 2 samples. JSON, text, and `data` support
+all point counts.
 
 Amplitude can be scaled with a numeric multiplier or normalized automatically:
 

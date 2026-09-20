@@ -1,5 +1,8 @@
+#[cfg(any(feature = "render", feature = "wav-output"))]
 use std::fs::File;
-use std::io::{self, Cursor, Read, Write};
+#[cfg(any(feature = "render", feature = "wav-output"))]
+use std::io::Write;
+use std::io::{self, Cursor, Read};
 use std::path::Path;
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -490,14 +493,12 @@ fn run(cli: Cli) -> Result<(), String> {
                 },
             },
         )?;
-        let mut output = create_output(cli.output_filename.as_deref())?;
-        waveform
-            .write_to_writer(
-                &mut output,
-                output_format.as_waveform_format().expect("waveform format"),
-                Some(bits.unwrap_or(16) as u8),
-            )
-            .map_err(stringify_error)?;
+        write_waveform_output(
+            &waveform,
+            cli.output_filename.as_deref(),
+            output_format.as_waveform_format().expect("waveform format"),
+            Some(bits.unwrap_or(16) as u8),
+        )?;
     } else if input_format.is_waveform_input()
         && matches!(
             output_format,
@@ -506,28 +507,24 @@ fn run(cli: Cli) -> Result<(), String> {
         && !has_resample
     {
         let waveform = load_waveform_input(cli.input_filename.as_deref(), input_format)?;
-        let mut output = create_output(cli.output_filename.as_deref())?;
-        waveform
-            .write_to_writer(
-                &mut output,
-                output_format.as_waveform_format().expect("waveform format"),
-                bits.map(|bits| bits as u8),
-            )
-            .map_err(stringify_error)?;
+        write_waveform_output(
+            &waveform,
+            cli.output_filename.as_deref(),
+            output_format.as_waveform_format().expect("waveform format"),
+            bits.map(|bits| bits as u8),
+        )?;
     } else if input_format.is_waveform_input()
         && matches!(output_format, CliFormat::Dat | CliFormat::Json)
         && has_resample
     {
         let waveform = load_waveform_input(cli.input_filename.as_deref(), input_format)?;
         let resampled = waveform.resample(scale).map_err(stringify_error)?;
-        let mut output = create_output(cli.output_filename.as_deref())?;
-        resampled
-            .write_to_writer(
-                &mut output,
-                output_format.as_waveform_format().expect("waveform format"),
-                bits.map(|bits| bits as u8),
-            )
-            .map_err(stringify_error)?;
+        write_waveform_output(
+            &resampled,
+            cli.output_filename.as_deref(),
+            output_format.as_waveform_format().expect("waveform format"),
+            bits.map(|bits| bits as u8),
+        )?;
     } else if (input_format.is_audio_input() || input_format.is_waveform_input())
         && output_format == CliFormat::Png
     {
@@ -546,7 +543,11 @@ fn run(cli: Cli) -> Result<(), String> {
                 )?
             } else {
                 let waveform = load_waveform_input(cli.input_filename.as_deref(), input_format)?;
-                waveform.resample(scale).map_err(stringify_error)?
+                if waveform.source_frames().is_some() && !has_resample {
+                    waveform
+                } else {
+                    waveform.resample(scale).map_err(stringify_error)?
+                }
             };
 
             let render_options = RenderOptions {
@@ -784,6 +785,21 @@ fn read_input_bytes(filename: Option<&str>) -> Result<Vec<u8>, String> {
     }
 }
 
+fn write_waveform_output(
+    waveform: &Waveform,
+    filename: Option<&str>,
+    format: WaveformFormat,
+    bits: Option<u8>,
+) -> Result<(), String> {
+    if is_stdio_filename(filename) {
+        waveform.write_to_writer(io::stdout().lock(), format, bits)
+    } else {
+        waveform.write_to_path(filename.expect("checked stdio"), Some(format), bits)
+    }
+    .map_err(stringify_error)
+}
+
+#[cfg(any(feature = "render", feature = "wav-output"))]
 fn create_output(filename: Option<&str>) -> Result<Box<dyn Write>, String> {
     if is_stdio_filename(filename) {
         Ok(Box::new(io::stdout()))
