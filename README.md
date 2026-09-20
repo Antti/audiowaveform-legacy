@@ -138,11 +138,11 @@ Additional examples live in `crates/audiowaveform/examples`.
 
 ## Ruby Usage
 
-Install the `audiowaveform` gem from the project's repository and generate waveform
+Install the `audiowaveform` gem from RubyGems and generate waveform
 data without invoking the command-line program:
 
 ```ruby
-gem "audiowaveform", github: "Antti/audiowaveform"
+gem "audiowaveform", "~> 0.1"
 ```
 
 ```ruby

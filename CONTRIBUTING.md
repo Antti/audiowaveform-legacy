@@ -62,9 +62,13 @@ bundle exec rake build
 
 ## Releases
 
-Release preparation should be a dedicated change. For a release:
+Release preparation should be a dedicated change. For a Rust library/CLI release:
 
 - Update `[workspace.package].version` in `Cargo.toml`.
 - Update `CHANGELOG.md`.
 - Regenerate `Cargo.lock` if dependency resolution changes.
 - Tag the release as `X.Y.Z`.
+
+Ruby gems have a separate version and use `ruby-vX.Y.Z` tags. See the
+[Ruby release procedure](bindings/ruby/README.md#releasing-to-rubygems) for
+Trusted Publishing setup, precompiled packages, and release validation.

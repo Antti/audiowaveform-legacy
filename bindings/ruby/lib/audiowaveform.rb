@@ -1,7 +1,19 @@
 # frozen_string_literal: true
 
 require_relative "audiowaveform/version"
-require "audiowaveform/audiowaveform_ruby"
+require "rbconfig"
+
+# Platform gems contain one extension per Ruby minor version. Source builds put
+# the extension directly under audiowaveform/.
+native_extension = File.join(
+  __dir__, "audiowaveform", RUBY_VERSION[/\A\d+\.\d+/],
+  "audiowaveform_ruby.#{RbConfig::CONFIG.fetch('DLEXT')}"
+)
+if File.file?(native_extension)
+  require native_extension
+else
+  require "audiowaveform/audiowaveform_ruby"
+end
 
 module AudioWaveform
   class << self
