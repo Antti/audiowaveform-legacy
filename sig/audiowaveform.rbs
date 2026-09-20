@@ -5,7 +5,7 @@ module AudioWaveform
   end
 
   def self.generate: (
-    _ToPath input,
+    path input,
     ?samples_per_pixel: Integer?,
     ?pixels_per_second: Integer?,
     ?split_channels: bool,
@@ -25,7 +25,7 @@ module AudioWaveform
     def duration_seconds: () -> Float
     def data: () -> Array[Integer]
     def point: (Integer index, ?channel: Integer) -> [Integer, Integer]
-    def save: (_ToPath path, ?format: (String | Symbol)?, ?bits: Integer) -> self
+    def save: (path path, ?format: (String | Symbol)?, ?bits: Integer) -> self
     def to_dat: (?bits: Integer) -> String
     def to_json: (*untyped arguments, ?bits: Integer) -> String
     def to_txt: (?bits: Integer) -> String

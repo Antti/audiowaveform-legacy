@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{ffi::c_void, ptr};
 
@@ -7,21 +7,25 @@ use audiowaveform_core::{
     AmplitudeScale, Error as CoreError, GenerateOptions, ScaleSpec, Waveform, WaveformFormat,
     generate_waveform_from_path,
 };
-use magnus::{Error, ExceptionClass, Module, Object, RString, Ruby, function, method, wrap};
+use magnus::{
+    DataTypeFunctions, Error, ExceptionClass, Module, Object, RString, Ruby, TypedData, function,
+    method, rb_sys::protect,
+};
 
-#[wrap(class = "AudioWaveform::Waveform", free_immediately)]
+#[derive(TypedData)]
+#[magnus(class = "AudioWaveform::Waveform", free_immediately, size)]
 struct RubyWaveform(Waveform);
+
+impl DataTypeFunctions for RubyWaveform {
+    fn size(&self) -> usize {
+        std::mem::size_of_val(self) + self.0.allocated_bytes()
+    }
+}
 
 struct NoGvlTask<F, T> {
     function: Option<F>,
     result: Option<T>,
     panicked: bool,
-}
-
-#[derive(Clone, Copy)]
-enum NoGvlFailure {
-    Panicked,
-    DidNotRun,
 }
 
 unsafe extern "C" fn call_without_gvl<F, T>(data: *mut c_void) -> *mut c_void
@@ -41,7 +45,7 @@ where
     ptr::null_mut()
 }
 
-fn without_gvl<F, T>(function: F) -> Result<T, NoGvlFailure>
+fn without_gvl<F, T>(ruby: &Ruby, function: F) -> Result<T, Error>
 where
     F: FnOnce() -> T,
 {
@@ -50,22 +54,32 @@ where
         result: None,
         panicked: false,
     };
-    // SAFETY: the callback only accesses the stack-allocated task during this
-    // synchronous call, does not call the Ruby API, and catches Rust panics
-    // before returning across the C ABI boundary.
-    unsafe {
-        rb_sys::rb_thread_call_without_gvl(
-            Some(call_without_gvl::<F, T>),
-            (&mut task as *mut NoGvlTask<F, T>).cast(),
-            None,
-            ptr::null_mut(),
-        );
-    }
+    // Ruby can raise while checking interrupts before or after the callback.
+    // Keep the task outside `protect` so its closure/result is dropped normally
+    // even when Ruby exits the protected call with a non-local jump.
+    protect(|| {
+        // SAFETY: the callback only accesses the live stack-allocated task,
+        // does not invoke Ruby methods, and catches Rust panics before they
+        // cross the C ABI boundary. rb-sys tracks its allocations for Ruby GC.
+        unsafe {
+            rb_sys::rb_thread_call_without_gvl(
+                Some(call_without_gvl::<F, T>),
+                (&mut task as *mut NoGvlTask<F, T>).cast(),
+                None,
+                ptr::null_mut(),
+            );
+        }
+        rb_sys::Qnil as rb_sys::VALUE
+    })?;
 
     if task.panicked {
-        Err(NoGvlFailure::Panicked)
+        Err(ruby_error(
+            ruby,
+            "native waveform operation failed unexpectedly",
+        ))
     } else {
-        task.result.ok_or(NoGvlFailure::DidNotRun)
+        task.result
+            .ok_or_else(|| ruby_error(ruby, "native waveform operation did not complete"))
     }
 }
 
@@ -116,26 +130,27 @@ impl RubyWaveform {
         bits: u8,
     ) -> Result<(), Error> {
         let format = parse_format(ruby, &format)?;
-        let result = without_gvl(|| -> Result<(), CoreError> {
+        let result = without_gvl(ruby, || -> Result<(), CoreError> {
             let file = File::create(path)?;
+            let mut writer = BufWriter::new(file);
             waveform
                 .0
-                .write_to_writer(BufWriter::new(file), format, Some(bits))
-        })
-        .map_err(|failure| no_gvl_error(ruby, failure))?;
+                .write_to_writer(&mut writer, format, Some(bits))?;
+            writer.flush()?;
+            Ok(())
+        })?;
         result.map_err(|error| core_error(ruby, error))
     }
 
     fn serialize(ruby: &Ruby, waveform: &Self, format: String, bits: u8) -> Result<RString, Error> {
         let format = parse_format(ruby, &format)?;
-        let result = without_gvl(|| {
+        let result = without_gvl(ruby, || {
             let mut bytes = Vec::new();
             waveform
                 .0
                 .write_to_writer(&mut bytes, format, Some(bits))
                 .map(|()| bytes)
-        })
-        .map_err(|failure| no_gvl_error(ruby, failure))?;
+        })?;
         let bytes = result.map_err(|error| core_error(ruby, error))?;
         Ok(ruby.str_from_slice(&bytes))
     }
@@ -167,8 +182,7 @@ fn generate(
         amplitude_scale,
     };
 
-    without_gvl(|| generate_waveform_from_path(input, &options))
-        .map_err(|failure| no_gvl_error(ruby, failure))?
+    without_gvl(ruby, || generate_waveform_from_path(input, &options))?
         .map(RubyWaveform)
         .map_err(|error| core_error(ruby, error))
 }
@@ -196,14 +210,6 @@ fn ruby_error(ruby: &Ruby, message: impl AsRef<str>) -> Error {
         .eval::<ExceptionClass>("AudioWaveform::Error")
         .unwrap_or_else(|_| ruby.exception_standard_error());
     Error::new(error_class, message.as_ref().to_owned())
-}
-
-fn no_gvl_error(ruby: &Ruby, failure: NoGvlFailure) -> Error {
-    let message = match failure {
-        NoGvlFailure::Panicked => "native waveform operation failed unexpectedly",
-        NoGvlFailure::DidNotRun => "native waveform operation did not complete",
-    };
-    ruby_error(ruby, message)
 }
 
 #[magnus::init]
