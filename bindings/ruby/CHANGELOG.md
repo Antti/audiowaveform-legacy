@@ -1,6 +1,8 @@
 # Ruby Gem Version History
 
-## Unreleased
+## 0.2.0 - 2026-09-20
+
+### Added
 
 - Add `AudioWaveform.generate(..., points: 110)` for an exact point count without
   duration metadata. Preserve decoded duration, repeat samples for very short
