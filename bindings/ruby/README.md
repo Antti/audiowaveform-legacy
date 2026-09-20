@@ -10,13 +10,13 @@ other Ruby threads can continue while a waveform is generated.
 Add the gem to your bundle:
 
 ```ruby
-gem "audiowaveform", github: "fetlife/audiowaveform"
+gem "audiowaveform", github: "Antti/audiowaveform"
 ```
 
 The source gem compiles a Rust extension during installation. Precompiled gems
 can be published for supported platforms so application deployments do not need
 a Rust toolchain. RubyGems.org publication is not configured; `ruby-vX.Y.Z`
-tags attach the source gem to a release in FetLife's GitHub repository.
+tags attach the source gem to a release in the project's GitHub repository.
 
 ## Usage
 

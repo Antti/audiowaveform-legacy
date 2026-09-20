@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 authors = ["Andrii Dmytrenko", "BBC Research and Development"]
 license = "GPL-3.0-or-later"
-repository = "https://github.com/fetlife/audiowaveform"
+repository = "https://github.com/Antti/audiowaveform"
 publish = false
 
 [lib]

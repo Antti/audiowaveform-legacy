@@ -1,13 +1,13 @@
 # audiowaveform
 
-[![CI](https://github.com/fetlife/audiowaveform/actions/workflows/rust.yml/badge.svg)](https://github.com/fetlife/audiowaveform/actions/workflows/rust.yml)
+[![CI](https://github.com/Antti/audiowaveform/actions/workflows/rust.yml/badge.svg)](https://github.com/Antti/audiowaveform/actions/workflows/rust.yml)
 
 `audiowaveform` is a Rust library and CLI for generating waveform data from audio,
 serializing waveform files, rendering PNG waveform images, and transcoding audio
 to PCM16 WAV.
 
 This repository is the canonical home of the Rust rewrite:
-[github.com/fetlife/audiowaveform](https://github.com/fetlife/audiowaveform).
+[github.com/Antti/audiowaveform](https://github.com/Antti/audiowaveform).
 
 It is a Rust rewrite of the original BBC `audiowaveform` project:
 [github.com/bbc/audiowaveform](https://github.com/bbc/audiowaveform).
@@ -105,11 +105,11 @@ Additional examples live in `crates/audiowaveform/examples`.
 
 ## Ruby Usage
 
-Install the `audiowaveform` gem from FetLife's repository and generate waveform
+Install the `audiowaveform` gem from the project's repository and generate waveform
 data without invoking the command-line program:
 
 ```ruby
-gem "audiowaveform", github: "fetlife/audiowaveform"
+gem "audiowaveform", github: "Antti/audiowaveform"
 ```
 
 ```ruby

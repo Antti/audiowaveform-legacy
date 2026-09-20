@@ -11,7 +11,7 @@ Gem::Specification.new do |spec|
     Native Ruby bindings for generating, inspecting, and serializing waveform
     data from WAV, MP3, FLAC, and Ogg/Vorbis audio.
   DESCRIPTION
-  spec.homepage = "https://github.com/fetlife/audiowaveform"
+  spec.homepage = "https://github.com/Antti/audiowaveform"
   spec.license = "GPL-3.0-or-later"
   spec.required_ruby_version = ">= 3.2"
 
