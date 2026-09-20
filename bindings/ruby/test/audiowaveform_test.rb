@@ -37,7 +37,13 @@ class AudioWaveformTest < Minitest::Test
   end
 
   def test_generates_from_each_documented_compressed_format
-    %w[test_file_stereo.mp3 test_file_stereo.flac test_file_stereo.oga].each do |filename|
+    %w[
+      test_file_stereo.mp3 test_file_stereo.flac test_file_stereo.oga
+      formats/stereo.aac formats/stereo.m4a formats/mono.m4a formats/alac.m4a
+      formats/fragmented.mp4 formats/video-first.mp4 formats/stereo.aiff
+      formats/stereo.caf formats/pcm.caf formats/stereo.webm formats/stereo.mka
+      formats/stereo.mp2 formats/silence.mp1 formats/flac.ogg formats/adpcm.wav
+    ].each do |filename|
       waveform = AudioWaveform.generate(fixture(filename))
 
       assert_operator waveform.length, :>, 0, filename

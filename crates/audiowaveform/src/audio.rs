@@ -9,7 +9,7 @@ use std::path::Path;
 #[cfg(feature = "decode")]
 use symphonia::core::audio::{AudioBufferRef, SampleBuffer, Signal};
 #[cfg(feature = "decode")]
-use symphonia::core::codecs::DecoderOptions;
+use symphonia::core::codecs::{CODEC_TYPE_ALAC, DecoderOptions};
 #[cfg(feature = "decode")]
 use symphonia::core::errors::Error as SymphoniaError;
 #[cfg(feature = "decode")]
@@ -542,11 +542,7 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
 ) -> Result<PcmAudio, Error> {
     let mut hint = Hint::new();
     if let Some(format) = format_hint {
-        if format == AudioFormat::Opus {
-            return Err(Error::UnsupportedFormat {
-                format: "opus".to_string(),
-            });
-        }
+        format.ensure_enabled()?;
         hint.with_extension(format.as_str());
     }
 
@@ -566,19 +562,32 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
         &MetadataOptions::default(),
     )?;
     let mut format = probed.format;
-    let track = format.default_track().ok_or(Error::MissingMetadata {
-        name: "default track",
-    })?;
-    let codec_params = &track.codec_params;
-    let sample_rate = codec_params.sample_rate.ok_or(Error::MissingMetadata {
-        name: "sample_rate",
-    })?;
-    let channels = codec_params
+    let track = format
+        .default_track()
+        .into_iter()
+        .chain(format.tracks())
+        .find(|track| get_codecs().get_codec(track.codec_params.codec).is_some())
+        .ok_or_else(|| Error::UnsupportedFormat {
+            format: "no supported audio track in this build".into(),
+        })?;
+    let track_id = track.id;
+    let mut codec_params = track.codec_params.clone();
+    if codec_params.codec == CODEC_TYPE_ALAC {
+        // CAF can wrap ALAC configuration in legacy frma/alac atoms; the decoder wants the payload.
+        const WRAPPER: &[u8] = b"\x00\x00\x00\x0cfrmaalac\x00\x00\x00\x24alac\x00\x00\x00\x00";
+        if let Some(cookie) = &codec_params.extra_data
+            && cookie.len() == WRAPPER.len() + 24
+            && cookie.starts_with(WRAPPER)
+        {
+            codec_params.extra_data = Some(cookie[WRAPPER.len()..].into());
+        }
+    }
+    let mut sample_rate = codec_params.sample_rate;
+    let mut channels = codec_params
         .channels
-        .ok_or(Error::MissingMetadata { name: "channels" })?
-        .count() as u16;
+        .map(|channels| channels.count() as u16);
     let encoder_delay = codec_params.delay.unwrap_or(0) as usize;
-    let mut decoder = get_codecs().make(codec_params, &DecoderOptions::default())?;
+    let mut decoder = get_codecs().make(&codec_params, &DecoderOptions::default())?;
 
     let mut samples = Vec::new();
     loop {
@@ -592,6 +601,10 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
             Err(error) => return Err(error.into()),
         };
 
+        if packet.track_id() != track_id {
+            continue;
+        }
+
         let decoded = match decoder.decode(&packet) {
             Ok(decoded) => decoded,
             Err(SymphoniaError::DecodeError(_)) => continue,
@@ -602,6 +615,19 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
             }
             Err(error) => return Err(error.into()),
         };
+
+        let spec = decoded.spec();
+        let decoded_channels = spec.channels.count() as u16;
+        if !samples.is_empty()
+            && (sample_rate != Some(spec.rate) || channels != Some(decoded_channels))
+        {
+            return Err(Error::invalid_data(
+                "Audio stream changes sample rate or channel count",
+            ));
+        }
+        // MP4 can leave channel metadata in codec configuration rather than the container track.
+        sample_rate = Some(spec.rate);
+        channels = Some(decoded_channels);
 
         match decoded {
             AudioBufferRef::F32(buffer) => {
@@ -619,6 +645,10 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
         }
     }
 
+    let sample_rate = sample_rate.ok_or(Error::MissingMetadata {
+        name: "sample_rate",
+    })?;
+    let channels = channels.ok_or(Error::MissingMetadata { name: "channels" })?;
     if encoder_delay > 0 {
         let samples_to_skip = encoder_delay.saturating_mul(usize::from(channels));
         if samples_to_skip < samples.len() {

@@ -28,6 +28,13 @@ pub enum Error {
         format: String,
     },
 
+    /// Returned when a capability was omitted from this build.
+    #[error("Feature disabled: enable the `{feature}` Cargo feature")]
+    FeatureDisabled {
+        /// Cargo feature required to enable the capability.
+        feature: &'static str,
+    },
+
     /// Returned when a required value is missing from structured data.
     #[error("Missing value: {name}")]
     MissingValue {
@@ -56,7 +63,7 @@ pub enum Error {
     Symphonia(#[from] symphonia::core::errors::Error),
 
     /// Returned for WAV encoding failures.
-    #[cfg(feature = "wav")]
+    #[cfg(feature = "wav-output")]
     #[error(transparent)]
     Hound(#[from] hound::Error),
 

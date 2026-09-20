@@ -1,13 +1,28 @@
 mod support;
 
 use assert_cmd::Command;
+#[cfg(feature = "format-wav")]
 use audiowaveform::Waveform;
 use predicates::prelude::*;
 
-use self::support::{
-    assert_png_bytes_match_fixture, assert_png_file_matches_fixture,
-    assert_wav_file_matches_fixture, fixture_path, named_temp_file, read_fixture,
-};
+#[cfg(all(feature = "format-mp3", feature = "wav-output"))]
+use self::support::assert_wav_file_matches_fixture;
+#[cfg(any(
+    feature = "format-wav",
+    feature = "format-m4a",
+    feature = "render",
+    all(feature = "format-mp3", feature = "wav-output")
+))]
+use self::support::fixture_path;
+#[cfg(any(
+    feature = "format-wav",
+    feature = "render",
+    all(feature = "format-mp3", feature = "wav-output")
+))]
+use self::support::named_temp_file;
+use self::support::read_fixture;
+#[cfg(feature = "render")]
+use self::support::{assert_png_bytes_match_fixture, assert_png_file_matches_fixture};
 
 #[test]
 fn prints_help_and_version() {
@@ -56,6 +71,7 @@ fn rejects_invalid_enum_values_via_clap() {
         .stderr(predicate::str::contains("possible values"));
 }
 
+#[cfg(feature = "render")]
 #[test]
 fn rejects_non_finite_numeric_values() {
     let input = fixture_path("test_file_stereo_8bit_64spp_wav.dat");
@@ -118,6 +134,7 @@ fn rejects_raw_channel_counts_that_do_not_fit_the_library_type() {
         .stderr("Invalid number of input channels: maximum 65535\n");
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn generates_dat_output_to_file_and_stdout() {
     let output = named_temp_file(".dat");
@@ -160,6 +177,7 @@ fn generates_dat_output_to_file_and_stdout() {
         .stderr("Done\n");
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn generates_json_and_text_outputs_to_stdout() {
     Command::cargo_bin("audiowaveform")
@@ -196,6 +214,7 @@ fn generates_json_and_text_outputs_to_stdout() {
         .stderr("Done\n");
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn applies_fixed_amplitude_scaling_to_waveform_data_output() {
     let unscaled_output = named_temp_file(".json");
@@ -230,6 +249,7 @@ fn applies_fixed_amplitude_scaling_to_waveform_data_output() {
     assert_eq!(scaled.interleaved_samples(), expected);
 }
 
+#[cfg(feature = "render")]
 #[test]
 fn generates_png_output_to_file_and_stdout() {
     let output = named_temp_file(".png");
@@ -270,6 +290,7 @@ fn generates_png_output_to_file_and_stdout() {
     assert_png_bytes_match_fixture(&output, "test_file_stereo_dat_128spp.png");
 }
 
+#[cfg(all(feature = "format-mp3", feature = "wav-output"))]
 #[test]
 fn transcodes_audio_to_wav_output() {
     let output = named_temp_file(".wav");
@@ -290,6 +311,7 @@ fn transcodes_audio_to_wav_output() {
     assert_wav_file_matches_fixture(output.path(), "test_file_mono_converted.wav", 1);
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn quiet_mode_suppresses_done_output() {
     let output = named_temp_file(".dat");
@@ -311,6 +333,7 @@ fn quiet_mode_suppresses_done_output() {
         .stderr("");
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn rejects_unsupported_output_combinations() {
     Command::cargo_bin("audiowaveform")
@@ -324,4 +347,137 @@ fn rejects_unsupported_output_combinations() {
         .assert()
         .failure()
         .stderr("Can't generate mp3 format output from wav format input\n");
+}
+
+#[test]
+fn converts_waveform_data_and_raw_pcm_without_optional_features() {
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "--input-format", "dat", "--output-format", "txt"])
+        .write_stdin(read_fixture("test_file_stereo_8bit_64spp_wav.dat"))
+        .assert()
+        .success()
+        .stdout(read_fixture("test_file_stereo_8bit_64spp_wav.txt"));
+
+    let output = Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args([
+            "-q",
+            "--input-format",
+            "raw",
+            "--raw-samplerate",
+            "16000",
+            "--raw-channels",
+            "1",
+            "--raw-format",
+            "s16le",
+            "--output-format",
+            "dat",
+            "-b",
+            "8",
+            "-z",
+            "64",
+        ])
+        .write_stdin(read_fixture("test_file_mono.raw"))
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let waveform = audiowaveform::Waveform::load_from_reader(
+        std::io::Cursor::new(output),
+        audiowaveform::WaveformFormat::Dat,
+    )
+    .unwrap();
+    assert_eq!(waveform.sample_rate(), 16_000);
+    assert_eq!(waveform.channels(), 1);
+    assert_eq!(waveform.storage_bits(), 8);
+    assert_eq!(
+        waveform.len(),
+        read_fixture("test_file_mono.raw").len().div_ceil(2 * 64)
+    );
+}
+
+#[test]
+fn reports_disabled_formats_before_creating_output_files() {
+    for (format, enabled, feature) in [
+        ("mp3", cfg!(feature = "format-mp3"), "format-mp3"),
+        ("m4a", cfg!(feature = "format-m4a"), "format-m4a"),
+        ("wav", cfg!(feature = "format-wav"), "format-wav"),
+        ("webm", cfg!(feature = "format-mkv"), "format-mkv"),
+    ] {
+        if enabled {
+            continue;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("output.json");
+        Command::cargo_bin("audiowaveform")
+            .unwrap()
+            .args([
+                "-q",
+                "--input-format",
+                format,
+                "-o",
+                output.to_str().unwrap(),
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "enable the `{feature}` Cargo feature"
+            )));
+        assert!(!output.exists());
+    }
+}
+
+#[test]
+fn reports_disabled_output_features() {
+    for (format, enabled, feature) in [
+        ("png", cfg!(feature = "render"), "render"),
+        ("wav", cfg!(feature = "wav-output"), "wav-output"),
+    ] {
+        if enabled {
+            continue;
+        }
+        Command::cargo_bin("audiowaveform")
+            .unwrap()
+            .args(["--input-format", "dat", "--output-format", format])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(format!(
+                "enable the `{feature}` Cargo feature"
+            )));
+    }
+}
+
+#[cfg(feature = "format-m4a")]
+#[test]
+fn generates_waveforms_from_m4a_paths_and_mp4_stdin() {
+    for fixture in [
+        "formats/stereo.m4a",
+        "formats/alac.m4a",
+        "formats/video-first.mp4",
+    ] {
+        let path_output = Command::cargo_bin("audiowaveform")
+            .unwrap()
+            .args([
+                "-q",
+                "-i",
+                fixture_path(fixture).to_str().unwrap(),
+                "--output-format",
+                "json",
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        assert!(String::from_utf8_lossy(&path_output).contains("48000"));
+        Command::cargo_bin("audiowaveform")
+            .unwrap()
+            .args(["-q", "--input-format", "m4a", "--output-format", "json"])
+            .write_stdin(read_fixture(fixture))
+            .assert()
+            .success()
+            .stdout(path_output);
+    }
 }

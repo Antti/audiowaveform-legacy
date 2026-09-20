@@ -4,13 +4,19 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::str::FromStr;
 
+#[cfg(all(feature = "decode", feature = "wav-output"))]
+use audiowaveform::decode_audio_from_reader;
+#[cfg(feature = "decode")]
+use audiowaveform::generate_waveform_from_reader;
 use audiowaveform::{
-    AmplitudeScale, AudioFormat, BarStyle, Color, ColorScheme, Error, GenerateOptions,
-    RawAudioConfig, RawSampleFormat, RenderOptions, RenderStyle, ScaleSpec, Waveform,
-    WaveformColors, WaveformFormat, decode_audio_from_reader, decode_raw_audio_reader,
-    generate_waveform_from_raw_reader, generate_waveform_from_reader, write_pcm_as_wav,
-    write_waveform_png,
+    AmplitudeScale, AudioFormat, Color, ColorScheme, Error, GenerateOptions, RawAudioConfig,
+    RawSampleFormat, ScaleSpec, Waveform, WaveformColors, WaveformFormat,
+    generate_waveform_from_raw_reader,
 };
+#[cfg(feature = "render")]
+use audiowaveform::{BarStyle, RenderOptions, RenderStyle, write_waveform_png};
+#[cfg(feature = "wav-output")]
+use audiowaveform::{decode_raw_audio_reader, write_pcm_as_wav};
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::{CommandFactory, Parser, ValueEnum};
 
@@ -161,6 +167,17 @@ struct Cli {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum CliFormat {
+    #[value(alias = "adts")]
+    Aac,
+    #[value(aliases = ["aif", "aifc"])]
+    Aiff,
+    Caf,
+    #[value(aliases = ["m4a", "m4b", "m4r", "m4v", "mov"])]
+    Mp4,
+    #[value(aliases = ["mka", "webm"])]
+    Mkv,
+    Mp1,
+    Mp2,
     Mp3,
     #[value(alias = "w64")]
     Wav,
@@ -182,6 +199,13 @@ impl CliFormat {
             .and_then(|value| value.to_str())
             .ok_or_else(|| format!("Unknown file format: {path}"))?;
         match extension.to_ascii_lowercase().as_str() {
+            "aac" | "adts" => Ok(Self::Aac),
+            "aiff" | "aif" | "aifc" => Ok(Self::Aiff),
+            "caf" => Ok(Self::Caf),
+            "mp4" | "m4a" | "m4b" | "m4r" | "m4v" | "mov" => Ok(Self::Mp4),
+            "mkv" | "mka" | "webm" => Ok(Self::Mkv),
+            "mp1" => Ok(Self::Mp1),
+            "mp2" => Ok(Self::Mp2),
             "mp3" => Ok(Self::Mp3),
             "wav" | "w64" => Ok(Self::Wav),
             "flac" => Ok(Self::Flac),
@@ -197,10 +221,7 @@ impl CliFormat {
     }
 
     fn is_audio_input(self) -> bool {
-        matches!(
-            self,
-            Self::Mp3 | Self::Wav | Self::Flac | Self::Ogg | Self::Opus | Self::Raw
-        )
+        self.as_audio_format().is_some()
     }
 
     fn is_waveform_input(self) -> bool {
@@ -209,6 +230,13 @@ impl CliFormat {
 
     fn as_audio_format(self) -> Option<AudioFormat> {
         match self {
+            Self::Aac => Some(AudioFormat::Aac),
+            Self::Aiff => Some(AudioFormat::Aiff),
+            Self::Caf => Some(AudioFormat::Caf),
+            Self::Mp4 => Some(AudioFormat::Mp4),
+            Self::Mkv => Some(AudioFormat::Mkv),
+            Self::Mp1 => Some(AudioFormat::Mp1),
+            Self::Mp2 => Some(AudioFormat::Mp2),
             Self::Mp3 => Some(AudioFormat::Mp3),
             Self::Wav => Some(AudioFormat::Wav),
             Self::Flac => Some(AudioFormat::Flac),
@@ -230,6 +258,13 @@ impl CliFormat {
 
     fn name(self) -> &'static str {
         match self {
+            Self::Aac => "aac",
+            Self::Aiff => "aiff",
+            Self::Caf => "caf",
+            Self::Mp4 => "mp4",
+            Self::Mkv => "mkv",
+            Self::Mp1 => "mp1",
+            Self::Mp2 => "mp2",
             Self::Mp3 => "mp3",
             Self::Wav => "wav",
             Self::Flac => "flac",
@@ -271,6 +306,7 @@ enum CliBarStyle {
     Rounded,
 }
 
+#[cfg(feature = "render")]
 impl CliBarStyle {
     fn into_library(self) -> BarStyle {
         match self {
@@ -376,14 +412,15 @@ fn run(cli: Cli) -> Result<(), String> {
     let input_format = resolve_format(cli.input_filename.as_deref(), cli.input_format, true)?;
     let output_format = resolve_format(cli.output_filename.as_deref(), cli.output_format, false)?;
     let bits = resolve_bits(cli.bits)?;
-    let compression = resolve_compression(cli.compression)?;
+    let _compression = resolve_compression(cli.compression)?;
     let amplitude = parse_amplitude_scale(&cli.amplitude_scale)?;
-    let colors = resolve_colors(&cli)?;
-    let axis_labels = if cli.with_axis_labels {
+    let _colors = resolve_colors(&cli)?;
+    let _axis_labels = if cli.with_axis_labels {
         true
     } else {
         !cli.no_axis_labels
     };
+    #[cfg(feature = "render")]
     let render_style = resolve_render_style(&cli)?;
     let scale = resolve_scale(&cli)?;
     let raw_config = if input_format == CliFormat::Raw {
@@ -392,24 +429,49 @@ fn run(cli: Cli) -> Result<(), String> {
         None
     };
     let has_resample = cli.zoom.is_some() || cli.pixels_per_second.is_some() || cli.end.is_some();
+    if let Some(format) = input_format.as_audio_format() {
+        format.ensure_enabled().map_err(stringify_error)?;
+    }
+    if output_format == CliFormat::Png && !cfg!(feature = "render") {
+        return Err(stringify_error(Error::FeatureDisabled {
+            feature: "render",
+        }));
+    }
+    if output_format == CliFormat::Wav && !cfg!(feature = "wav-output") {
+        return Err(stringify_error(Error::FeatureDisabled {
+            feature: "wav-output",
+        }));
+    }
 
     if input_format.is_audio_input() && output_format == CliFormat::Wav {
-        let bytes = read_input_bytes(cli.input_filename.as_deref())?;
-        let mut output = create_output(cli.output_filename.as_deref())?;
-        match input_format {
-            CliFormat::Raw => {
-                let pcm = decode_raw_audio_reader(
-                    Cursor::new(bytes),
-                    raw_config.as_ref().expect("validated raw config"),
-                )
-                .map_err(stringify_error)?;
-                write_pcm_as_wav(&pcm, &mut output).map_err(stringify_error)?;
-            }
-            _ => {
-                let pcm =
-                    decode_audio_from_reader(Cursor::new(bytes), input_format.as_audio_format())
+        #[cfg(feature = "wav-output")]
+        {
+            let bytes = read_input_bytes(cli.input_filename.as_deref())?;
+            let mut output = create_output(cli.output_filename.as_deref())?;
+            match input_format {
+                CliFormat::Raw => {
+                    let pcm = decode_raw_audio_reader(
+                        Cursor::new(bytes),
+                        raw_config.as_ref().expect("validated raw config"),
+                    )
+                    .map_err(stringify_error)?;
+                    write_pcm_as_wav(&pcm, &mut output).map_err(stringify_error)?;
+                }
+                _ => {
+                    #[cfg(feature = "decode")]
+                    {
+                        let pcm = decode_audio_from_reader(
+                            Cursor::new(bytes),
+                            input_format.as_audio_format(),
+                        )
                         .map_err(stringify_error)?;
-                write_pcm_as_wav(&pcm, &mut output).map_err(stringify_error)?;
+                        write_pcm_as_wav(&pcm, &mut output).map_err(stringify_error)?;
+                    }
+                    #[cfg(not(feature = "decode"))]
+                    return Err(stringify_error(Error::FeatureDisabled {
+                        feature: "decode",
+                    }));
+                }
             }
         }
     } else if input_format.is_audio_input()
@@ -469,38 +531,41 @@ fn run(cli: Cli) -> Result<(), String> {
     } else if (input_format.is_audio_input() || input_format.is_waveform_input())
         && output_format == CliFormat::Png
     {
-        let waveform = if input_format.is_audio_input() {
-            generate_waveform_from_input(
-                cli.input_filename.as_deref(),
-                input_format,
-                raw_config.as_ref(),
-                GenerateOptions {
-                    scale,
-                    split_channels: cli.split_channels,
-                    amplitude_scale: None,
+        #[cfg(feature = "render")]
+        {
+            let waveform = if input_format.is_audio_input() {
+                generate_waveform_from_input(
+                    cli.input_filename.as_deref(),
+                    input_format,
+                    raw_config.as_ref(),
+                    GenerateOptions {
+                        scale,
+                        split_channels: cli.split_channels,
+                        amplitude_scale: None,
+                    },
+                )?
+            } else {
+                let waveform = load_waveform_input(cli.input_filename.as_deref(), input_format)?;
+                waveform.resample(scale).map_err(stringify_error)?
+            };
+
+            let render_options = RenderOptions {
+                width: cli.width as u32,
+                height: cli.height as u32,
+                start_time: cli.start,
+                amplitude_scale: match amplitude {
+                    ParsedAmplitudeScale::Auto => AmplitudeScale::Auto,
+                    ParsedAmplitudeScale::Fixed(value) => AmplitudeScale::Fixed(value),
                 },
-            )?
-        } else {
-            let waveform = load_waveform_input(cli.input_filename.as_deref(), input_format)?;
-            waveform.resample(scale).map_err(stringify_error)?
-        };
+                axis_labels: _axis_labels,
+                style: render_style,
+                colors: _colors,
+                png_compression_level: _compression.map(|value| value as u8),
+            };
 
-        let render_options = RenderOptions {
-            width: cli.width as u32,
-            height: cli.height as u32,
-            start_time: cli.start,
-            amplitude_scale: match amplitude {
-                ParsedAmplitudeScale::Auto => AmplitudeScale::Auto,
-                ParsedAmplitudeScale::Fixed(value) => AmplitudeScale::Fixed(value),
-            },
-            axis_labels,
-            style: render_style,
-            colors,
-            png_compression_level: compression.map(|value| value as u8),
-        };
-
-        let mut output = create_output(cli.output_filename.as_deref())?;
-        write_waveform_png(&waveform, &render_options, &mut output).map_err(stringify_error)?;
+            let mut output = create_output(cli.output_filename.as_deref())?;
+            write_waveform_png(&waveform, &render_options, &mut output).map_err(stringify_error)?;
+        }
     } else {
         return Err(format!(
             "Can't generate {} format output from {} format input",
@@ -630,6 +695,7 @@ fn resolve_colors(cli: &Cli) -> Result<WaveformColors, String> {
     Ok(colors)
 }
 
+#[cfg(feature = "render")]
 fn resolve_render_style(cli: &Cli) -> Result<RenderStyle, String> {
     match cli.waveform_style {
         CliWaveformStyle::Normal => Ok(RenderStyle::Normal),
@@ -686,8 +752,13 @@ fn generate_waveform_from_input(
             &options,
         )
         .map_err(stringify_error),
+        #[cfg(feature = "decode")]
         _ => generate_waveform_from_reader(Cursor::new(bytes), format.as_audio_format(), &options)
             .map_err(stringify_error),
+        #[cfg(not(feature = "decode"))]
+        _ => Err(stringify_error(Error::FeatureDisabled {
+            feature: "decode",
+        })),
     }
 }
 

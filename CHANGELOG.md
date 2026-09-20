@@ -4,6 +4,17 @@ This repository is a Rust rewrite of the original BBC `audiowaveform`
 project. Historical entries below are inherited from that original project and
 are kept here as release history context.
 
+## Unreleased
+
+- Make the Rust library minimal by default, with opt-in `format-*`, `render`,
+  and `wav-output` features and an `all-formats` input bundle.
+- Enable every supported input format, PNG rendering, and WAV output by default
+  in the CLI; allow custom builds with `--no-default-features`.
+- Add AAC-LC/ADTS, MP4/M4A (including ALAC), AIFF, CAF, MPEG layers I/II,
+  Matroska/WebM audio, Ogg FLAC, and WAV ADPCM input support.
+- Select a supported audio track in multi-track containers and report disabled
+  capabilities with their required Cargo feature.
+
 ## v1.10.3 (2025-08-20)
 
  * Fixed CMakeLists.txt to work with Boost 1.89.0 and later versions

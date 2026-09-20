@@ -1,5 +1,11 @@
 # Ruby Gem Version History
 
+## Unreleased
+
+- Enable all supported Rust input formats in source and precompiled builds,
+  including AAC-LC/M4A, ALAC, AIFF, CAF, MPEG layers I/II, Matroska/WebM audio,
+  Ogg FLAC, and WAV ADPCM. Opus and HE-AAC remain unsupported.
+
 ## 0.1.0 - 2026-09-20
 
 ### Added

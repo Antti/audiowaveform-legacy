@@ -6,15 +6,29 @@ use crate::Error;
 /// Supported audio container or source formats.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AudioFormat {
+    /// AAC audio in an ADTS stream.
+    Aac,
+    /// AIFF or AIFF-C audio.
+    Aiff,
+    /// Core Audio Format audio.
+    Caf,
+    /// Audio in an ISO MP4 container, including M4A.
+    Mp4,
+    /// Audio in a Matroska or WebM container.
+    Mkv,
+    /// MPEG layer I audio.
+    Mp1,
+    /// MPEG layer II audio.
+    Mp2,
     /// MP3 audio.
     Mp3,
     /// WAV audio.
     Wav,
     /// FLAC audio.
     Flac,
-    /// Ogg Vorbis audio.
+    /// Ogg Vorbis or FLAC audio.
     Ogg,
-    /// Opus audio.
+    /// Opus audio (recognized, but decoding is not supported).
     Opus,
     /// Headerless raw PCM or floating-point audio.
     Raw,
@@ -24,6 +38,13 @@ impl AudioFormat {
     /// Returns the canonical lowercase name for the format.
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Aac => "aac",
+            Self::Aiff => "aiff",
+            Self::Caf => "caf",
+            Self::Mp4 => "mp4",
+            Self::Mkv => "mkv",
+            Self::Mp1 => "mp1",
+            Self::Mp2 => "mp2",
             Self::Mp3 => "mp3",
             Self::Wav => "wav",
             Self::Flac => "flac",
@@ -42,6 +63,13 @@ impl AudioFormat {
     /// Infers an audio format from a file extension string.
     pub fn from_extension(extension: &str) -> Option<Self> {
         match extension.to_ascii_lowercase().as_str() {
+            "aac" | "adts" => Some(Self::Aac),
+            "aiff" | "aif" | "aifc" => Some(Self::Aiff),
+            "caf" => Some(Self::Caf),
+            "mp4" | "m4a" | "m4b" | "m4r" | "m4v" | "mov" => Some(Self::Mp4),
+            "mkv" | "mka" | "webm" => Some(Self::Mkv),
+            "mp1" => Some(Self::Mp1),
+            "mp2" => Some(Self::Mp2),
             "mp3" => Some(Self::Mp3),
             "wav" | "w64" => Some(Self::Wav),
             "flac" => Some(Self::Flac),
@@ -49,6 +77,37 @@ impl AudioFormat {
             "opus" => Some(Self::Opus),
             "raw" => Some(Self::Raw),
             _ => None,
+        }
+    }
+
+    /// Checks whether this build includes the input format's decoding feature.
+    ///
+    /// Raw audio is always available through the raw PCM APIs. Opus is recognized
+    /// only to report that it is unsupported, even with `all-formats` enabled.
+    pub fn ensure_enabled(self) -> Result<(), Error> {
+        let (enabled, feature) = match self {
+            Self::Aac => (cfg!(feature = "format-aac"), "format-aac"),
+            Self::Aiff => (cfg!(feature = "format-aiff"), "format-aiff"),
+            Self::Caf => (cfg!(feature = "format-caf"), "format-caf"),
+            Self::Mp4 => (cfg!(feature = "format-m4a"), "format-m4a"),
+            Self::Mkv => (cfg!(feature = "format-mkv"), "format-mkv"),
+            Self::Mp1 => (cfg!(feature = "format-mp1"), "format-mp1"),
+            Self::Mp2 => (cfg!(feature = "format-mp2"), "format-mp2"),
+            Self::Mp3 => (cfg!(feature = "format-mp3"), "format-mp3"),
+            Self::Wav => (cfg!(feature = "format-wav"), "format-wav"),
+            Self::Flac => (cfg!(feature = "format-flac"), "format-flac"),
+            Self::Ogg => (cfg!(feature = "format-ogg"), "format-ogg"),
+            Self::Raw => return Ok(()),
+            Self::Opus => {
+                return Err(Error::UnsupportedFormat {
+                    format: "opus".into(),
+                });
+            }
+        };
+        if enabled {
+            Ok(())
+        } else {
+            Err(Error::FeatureDisabled { feature })
         }
     }
 }
@@ -130,8 +189,8 @@ mod tests {
         assert_eq!("wav".parse::<AudioFormat>().expect("wav"), AudioFormat::Wav);
         assert_eq!("oga".parse::<AudioFormat>().expect("oga"), AudioFormat::Ogg);
 
-        let error = "aac".parse::<AudioFormat>().expect_err("unsupported");
-        assert_eq!(error.to_string(), "Unsupported format: aac");
+        let error = "unknown".parse::<AudioFormat>().expect_err("unsupported");
+        assert_eq!(error.to_string(), "Unsupported format: unknown");
     }
 
     #[test]

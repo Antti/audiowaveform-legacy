@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.summary = "Fast audio waveform generation for Ruby, powered by Rust."
   spec.description = <<~DESCRIPTION.strip
     Native Ruby bindings for generating, inspecting, and serializing waveform
-    data from WAV, MP3, FLAC, and Ogg/Vorbis audio.
+    data from AAC/M4A, ALAC, MP3, WAV, FLAC, Ogg, AIFF, CAF, and Matroska audio.
   DESCRIPTION
   spec.homepage = "https://github.com/Antti/audiowaveform"
   spec.license = "GPL-3.0-or-later"

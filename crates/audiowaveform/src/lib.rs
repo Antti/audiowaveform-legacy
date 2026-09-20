@@ -6,12 +6,21 @@
 //! flags. The companion CLI lives in `audiowaveform-cli` and translates its
 //! argument model into these library APIs.
 //!
+//! # Features
+//!
+//! No features are enabled by default. PCM/raw waveform generation, serialization,
+//! and resampling are always available. Enable `format-mp3`, `format-m4a`, or another
+//! `format-*` bundle for decoding, or `all-formats` for every supported input format.
+//! Each format enables the shared `decode` plumbing. `render` enables PNG rendering;
+//! `wav-output` enables PCM16 WAV writing independently of input decoding.
+//! Opus and HE-AAC are not supported, even with `all-formats` enabled.
+//!
 //! # Examples
 //!
 //! Generate waveform data from an audio file:
 //!
 //! ```no_run
-//! # #[cfg(feature = "decode")]
+//! # #[cfg(feature = "format-mp3")]
 //! # {
 //! use audiowaveform::{GenerateOptions, Waveform, generate_waveform_from_path};
 //!
@@ -40,7 +49,7 @@ mod error;
 mod format;
 #[cfg(feature = "render")]
 mod render;
-#[cfg(feature = "wav")]
+#[cfg(feature = "wav-output")]
 mod wav;
 mod waveform;
 
@@ -63,8 +72,8 @@ pub use render::{
     BarStyle, RenderOptions, RenderStyle, render_waveform, render_waveform_to_path,
     write_waveform_png,
 };
-#[cfg(feature = "wav")]
+#[cfg(feature = "wav-output")]
 pub use wav::write_pcm_as_wav;
-#[cfg(all(feature = "decode", feature = "wav"))]
+#[cfg(all(feature = "decode", feature = "wav-output"))]
 pub use wav::{transcode_audio_path_to_wav_path, transcode_audio_reader_to_wav_writer};
 pub use waveform::{AmplitudeScale, Waveform, WaveformPoint};

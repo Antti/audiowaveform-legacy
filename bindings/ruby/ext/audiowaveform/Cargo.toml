@@ -12,7 +12,7 @@ name = "audiowaveform_ruby"
 crate-type = ["cdylib"]
 
 [dependencies]
-audiowaveform-core = { package = "audiowaveform", path = "../../../../crates/audiowaveform", default-features = false, features = ["decode"] }
+audiowaveform-core = { package = "audiowaveform", path = "../../../../crates/audiowaveform", default-features = false, features = ["all-formats"] }
 magnus = { version = "0.8.2", features = ["rb-sys"] }
 rb-sys = { version = "0.9", features = ["stable-api-compiled-fallback", "global-allocator"] }
 
