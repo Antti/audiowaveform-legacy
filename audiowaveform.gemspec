@@ -6,7 +6,7 @@ Gem::Specification.new do |spec|
   spec.name = "audiowaveform"
   spec.version = AudioWaveform::VERSION
   spec.authors = ["Andrii Dmytrenko", "BBC Research and Development"]
-  spec.summary = "Generate audio waveform data using the Rust audiowaveform library"
+  spec.summary = "Fast audio waveform generation for Ruby, powered by Rust."
   spec.description = <<~DESCRIPTION.strip
     Native Ruby bindings for generating, inspecting, and serializing waveform
     data from WAV, MP3, FLAC, and Ogg/Vorbis audio.
