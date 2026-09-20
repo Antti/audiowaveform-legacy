@@ -72,6 +72,11 @@ overridden by the \fB--input-format\fR option. If the \fB--input-filename\fR
 option is \fB-\fR or is omitted, \fBaudiowaveform\fR reads from standard input,
 and the \fB--input-format\fR option must be used to specify the data format.
 
+When generating waveform data or images, encoded audio from standard input or
+named pipes is copied to a temporary file before decoding. Raw PCM streams
+directly at fixed scales; \fB--zoom auto\fR copies it to a temporary file to
+determine its length. Temporary storage must accommodate the complete input.
+
 .TP
 .B --output-filename\fR, \fB-o\fR <filename>
 Output filename, which may be either a WAV audio file, a binary or JSON format
@@ -106,6 +111,10 @@ samples to use to generate each output waveform data point.
 Note: this option cannot be used if either the \fB--pixels-per-second\fR or
 \fB--end\fR option is specified. When creating a PNG image file, a value of
 \fBauto\fR scales the waveform automatically to fit the image width.
+For encoded audio, automatic fitting decodes twice: first to count actual
+frames, then to aggregate peaks. Keep the input file unchanged between passes.
+Fixed scales decode once. Generation aggregates decoded blocks incrementally;
+memory includes the output waveform plus decoder and container state.
 
 .TP
 .B --pixels-per-second\fR <zoom> (default: 100)
