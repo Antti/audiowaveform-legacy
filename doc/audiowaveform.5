@@ -206,6 +206,18 @@ Sample rate of the original audio file (Hz).
 .TP
 .B \fBsamples_per_pixel\fR (Number)
 Number of audio samples per waveform minimum/maximum pair.
+For exact-point generation, this is a nominal integer rounded down with a
+minimum of 2. Use \fBsource_frames\fR for precise timing when present.
+
+.TP
+.B \fBsource_frames\fR (Number, optional extension)
+Decoded audio frame count retained by exact-point generation. Duration is
+\fBsource_frames / sample_rate\fR seconds. For nonempty waveforms, average point
+spacing is \fBsource_frames / length\fR frames. Empty waveforms have zero frames
+and zero points. This field is omitted for ordinary fixed-scale waveforms.
+Readers that ignore it retain only approximate timing for exact-point data.
+DAT export is rejected when the exact timing cannot be represented by an
+integer \fBsamples_per_pixel\fR of at least 2.
 
 .TP
 .B \fBbits\fR (Number)
