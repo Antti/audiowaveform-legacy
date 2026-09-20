@@ -326,15 +326,22 @@ fn draw_time_axis_labels(image: &mut RgbaImage, waveform: &Waveform, options: &R
     };
     let axis_label_offset_secs = first_secs as f64 - options.start_time;
     let axis_label_offset_pixels = ((axis_label_offset_secs * waveform.sample_rate() as f64)
-        / waveform.samples_per_pixel() as f64) as i64;
+        / waveform.samples_per_point()) as i64;
     let border = rgba(options.colors.border);
     let text = rgba(options.colors.axis_label);
     let mut secs = first_secs;
 
     loop {
-        let x = i128::from(axis_label_offset_pixels)
-            + (i128::from(secs - first_secs) * i128::from(waveform.sample_rate())
-                / i128::from(waveform.samples_per_pixel()));
+        let offset = if let Some(frames) = waveform.source_frames() {
+            i128::from(secs - first_secs)
+                * i128::from(waveform.sample_rate())
+                * waveform.len() as i128
+                / i128::from(frames)
+        } else {
+            i128::from(secs - first_secs) * i128::from(waveform.sample_rate())
+                / i128::from(waveform.samples_per_pixel())
+        };
+        let x = i128::from(axis_label_offset_pixels) + offset;
         if x >= i128::from(image.width()) {
             break;
         }
@@ -591,7 +598,7 @@ fn round_up_to_nearest(value: f64, multiple: i64) -> Option<i64> {
 }
 
 fn seconds_to_pixels(waveform: &Waveform, seconds: f64) -> usize {
-    (seconds * waveform.sample_rate() as f64 / waveform.samples_per_pixel() as f64) as usize
+    (seconds * waveform.sample_rate() as f64 / waveform.samples_per_point()) as usize
 }
 
 fn scale_sample(value: i16, multiplier: f64) -> i16 {
@@ -617,7 +624,7 @@ const LABEL_FONT_ADVANCE: i32 = LABEL_FONT_WIDTH + LABEL_FONT_TRACKING;
 mod tests {
     use super::{
         LABEL_FONT_HEIGHT, RenderOptions, RenderStyle, glyph_bitmap, render_waveform,
-        round_up_to_nearest, seconds_to_string,
+        round_up_to_nearest, seconds_to_pixels, seconds_to_string,
     };
     use crate::{AmplitudeScale, Waveform, WaveformColors, WaveformPoint};
 
@@ -630,6 +637,61 @@ mod tests {
             }])
             .expect("push point");
         waveform
+    }
+
+    #[test]
+    fn exact_point_rendering_uses_fractional_timing() {
+        use crate::{GenerateOptions, PcmAudio, ScaleSpec, generate_waveform_from_pcm};
+
+        let pcm = PcmAudio::new(48_000, 1, vec![16_384; 12_000]).unwrap();
+        let waveform = generate_waveform_from_pcm(
+            &pcm,
+            &GenerateOptions {
+                scale: ScaleSpec::Points(110),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(seconds_to_pixels(&waveform, 0.125), 55);
+        assert_eq!(seconds_to_pixels(&waveform, 0.25), 110);
+        let full = render_waveform(
+            &waveform,
+            &RenderOptions {
+                width: 110,
+                height: 40,
+                axis_labels: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let tail = render_waveform(
+            &waveform,
+            &RenderOptions {
+                width: 55,
+                height: 40,
+                start_time: 0.125,
+                axis_labels: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            image::imageops::crop_imm(&full, 55, 0, 55, 40).to_image(),
+            tail
+        );
+        // Also exercise the time-axis path (including scales under one sample per point).
+        for frames in [1, 96_001] {
+            let pcm = PcmAudio::new(48_000, 1, vec![0; frames]).unwrap();
+            let waveform = generate_waveform_from_pcm(
+                &pcm,
+                &GenerateOptions {
+                    scale: ScaleSpec::Points(110),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            render_waveform(&waveform, &RenderOptions::default()).unwrap();
+        }
     }
 
     #[test]

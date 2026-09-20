@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{ffi::c_void, ptr};
 
@@ -112,8 +110,8 @@ impl RubyWaveform {
         self.0.duration_seconds()
     }
 
-    fn data(&self) -> Vec<i16> {
-        self.0.interleaved_samples().to_vec()
+    fn data(ruby: &Ruby, waveform: &Self, bits: u8) -> Result<Vec<i16>, Error> {
+        without_gvl(ruby, || waveform.0.data(bits))?.map_err(|error| core_error(ruby, error))
     }
 
     fn point(&self, channel: u16, index: usize) -> Option<(i16, i16)> {
@@ -130,14 +128,8 @@ impl RubyWaveform {
         bits: u8,
     ) -> Result<(), Error> {
         let format = parse_format(ruby, &format)?;
-        let result = without_gvl(ruby, || -> Result<(), CoreError> {
-            let file = File::create(path)?;
-            let mut writer = BufWriter::new(file);
-            waveform
-                .0
-                .write_to_writer(&mut writer, format, Some(bits))?;
-            writer.flush()?;
-            Ok(())
+        let result = without_gvl(ruby, || {
+            waveform.0.write_to_path(path, Some(format), Some(bits))
         })?;
         result.map_err(|error| core_error(ruby, error))
     }
@@ -168,6 +160,7 @@ fn generate(
     let scale = match scale_kind.as_str() {
         "samples_per_pixel" => ScaleSpec::SamplesPerPixel(scale_value),
         "pixels_per_second" => ScaleSpec::PixelsPerSecond(scale_value),
+        "points" => ScaleSpec::Points(scale_value),
         _ => return Err(argument_error(ruby, "unsupported waveform scale")),
     };
     let amplitude_scale = match amplitude_kind.as_str() {
@@ -231,7 +224,7 @@ fn init(ruby: &Ruby) -> Result<(), Error> {
     waveform.define_method("length", method!(RubyWaveform::length, 0))?;
     waveform.define_method("empty?", method!(RubyWaveform::empty, 0))?;
     waveform.define_method("duration", method!(RubyWaveform::duration, 0))?;
-    waveform.define_method("data", method!(RubyWaveform::data, 0))?;
+    waveform.define_private_method("__data", method!(RubyWaveform::data, 1))?;
     waveform.define_private_method("__point", method!(RubyWaveform::point, 2))?;
     waveform.define_private_method("__save", method!(RubyWaveform::save, 3))?;
     waveform.define_private_method("__serialize", method!(RubyWaveform::serialize, 2))?;

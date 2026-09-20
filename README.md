@@ -136,6 +136,19 @@ fn main() -> Result<(), audiowaveform::Error> {
 
 Additional examples live in `crates/audiowaveform/examples`.
 
+Use `ScaleSpec::Points(110)` in `GenerateOptions::scale` to generate exactly 110
+min/max pairs per channel from nonempty audio. Generation counts decoded PCM
+frames, so duration metadata is not required. Empty audio stays empty; very short
+clips repeat samples. `waveform.data(8)?` returns signed 8-bit values in a `Vec<i16>`
+using the same conversion as 8-bit serialization, without a JSON round trip.
+`data(16)` returns a copy of the original values.
+
+For exact point counts, `duration_seconds()` retains the decoded duration and
+`samples_per_point()` supplies the fractional scale. `samples_per_pixel()` is
+only a nominal integer scale. JSON preserves exact timing via `source_frames`;
+DAT export rejects scales it cannot represent. Exact-point waveforms must be
+regenerated from audio rather than appended to or resampled.
+
 ## Ruby Usage
 
 Install the `audiowaveform` gem from RubyGems and generate waveform
@@ -150,6 +163,13 @@ require "audiowaveform"
 
 waveform = AudioWaveform.generate("input.mp3", samples_per_pixel: 256)
 waveform.save("output.dat", bits: 8)
+```
+
+Generate a fixed-size array for a waveform display:
+
+```ruby
+waveform = AudioWaveform.generate("recording.m4a", points: 110)
+peaks = waveform.data(bits: 8) # 110 min/max pairs, 220 integers
 ```
 
 See [`bindings/ruby/README.md`](bindings/ruby/README.md) for the full Ruby API

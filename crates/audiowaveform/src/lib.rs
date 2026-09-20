@@ -42,6 +42,20 @@
 //! # }
 //! # Ok::<(), audiowaveform::Error>(())
 //! ```
+//!
+//! Generate a fixed number of points and read 8-bit values directly:
+//!
+//! ```
+//! use audiowaveform::{GenerateOptions, PcmAudio, ScaleSpec, generate_waveform_from_pcm};
+//!
+//! let pcm = PcmAudio::new(48_000, 1, vec![512; 12_000])?;
+//! let options = GenerateOptions { scale: ScaleSpec::Points(110), ..Default::default() };
+//! let waveform = generate_waveform_from_pcm(&pcm, &options)?;
+//! assert_eq!(waveform.len(), 110);
+//! assert_eq!(waveform.data(8)?, vec![2; 220]);
+//! assert_eq!(waveform.duration_seconds(), 0.25);
+//! # Ok::<(), audiowaveform::Error>(())
+//! ```
 
 mod audio;
 mod color;

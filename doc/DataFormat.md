@@ -138,6 +138,22 @@ Sample rate of the original audio file (Hz).
 ### samples_per_pixel
 
 Number of audio samples per waveform minimum/maximum pair.
+For exact-point generation, this is a nominal integer rounded down with a minimum
+of 2. Use `source_frames` for precise timing when present.
+
+### source_frames (optional extension)
+
+Exact-point generation adds the decoded audio frame count to JSON. Duration is
+`source_frames / sample_rate` seconds, and average point spacing is
+`source_frames / length` frames for nonempty waveforms. A frame contains one
+sample per source channel. Empty waveforms have zero frames and zero points.
+Bucket boundaries are `floor(index * source_frames / length)`; when a bucket
+contains no frames, it repeats the source frame at its start.
+
+This field is omitted for ordinary fixed-scale waveforms. Readers that ignore
+it retain only approximate timing for exact-point data. DAT cannot store it;
+export is rejected when the exact timing cannot be represented by its integer
+`samples_per_pixel` field.
 
 ### bits
 

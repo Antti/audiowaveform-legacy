@@ -130,6 +130,10 @@ impl PcmAudio {
 /// Waveform scale selection.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ScaleSpec {
+    /// Generate exactly this many points per channel from the decoded PCM.
+    /// Empty input stays empty; when there are fewer frames than points, samples repeat.
+    /// This scale is only supported for generation, not waveform resampling.
+    Points(u32),
     /// Use a fixed number of source samples per waveform point.
     SamplesPerPixel(u32),
     /// Derive samples per waveform point from a target number of rendered pixels per second.
@@ -145,8 +149,20 @@ pub enum ScaleSpec {
 
 impl ScaleSpec {
     /// Resolves the scale to a concrete number of samples per waveform point.
+    /// For `Points`, returns a nominal integer scale, rounded down with a minimum of 2.
     pub fn resolve(self, sample_rate: u32, frame_count: usize) -> Result<u32, Error> {
         let resolved = match self {
+            Self::Points(points) => {
+                if points == 0 {
+                    return Err(Error::invalid_argument(
+                        "points",
+                        "Invalid points: must be greater than zero",
+                    ));
+                }
+                u32::try_from((frame_count as u64 / u64::from(points)).max(2)).map_err(|_| {
+                    Error::invalid_argument("points", "Too many source frames per point")
+                })?
+            }
             Self::SamplesPerPixel(value) => value,
             Self::PixelsPerSecond(value) => {
                 if value == 0 {
@@ -341,6 +357,15 @@ pub fn generate_waveform_from_pcm(
     };
     let mut waveform = Waveform::new(pcm.sample_rate, samples_per_pixel, output_channels)?;
 
+    if let ScaleSpec::Points(points) = options.scale {
+        generate_exact_points(pcm, points, &mut waveform)?;
+        waveform.set_source_frames(pcm.frame_count() as u64)?;
+        return match options.amplitude_scale {
+            Some(scale) => waveform.scale_amplitude(scale),
+            None => Ok(waveform),
+        };
+    }
+
     let channels = usize::from(pcm.channels);
     let output_channels_usize = usize::from(output_channels);
     let mut mins = vec![i16::MAX; output_channels_usize];
@@ -376,6 +401,44 @@ pub fn generate_waveform_from_pcm(
         Some(scale) => waveform.scale_amplitude(scale),
         None => Ok(waveform),
     }
+}
+
+fn generate_exact_points(
+    pcm: &PcmAudio,
+    points: u32,
+    waveform: &mut Waveform,
+) -> Result<(), Error> {
+    let frames = pcm.frame_count();
+    if frames == 0 {
+        return Ok(());
+    }
+    let channels = usize::from(pcm.channels);
+    let mut mins = vec![i16::MAX; usize::from(waveform.channels())];
+    let mut maxs = vec![i16::MIN; usize::from(waveform.channels())];
+
+    for index in 0..u128::from(points) {
+        // Integer boundaries partition every source frame exactly once when downsampling.
+        // Empty buckets repeat their source frame when more points than frames are requested.
+        let start = (index * frames as u128 / u128::from(points)) as usize;
+        let end = (((index + 1) * frames as u128 / u128::from(points)) as usize).max(start + 1);
+        mins.fill(i16::MAX);
+        maxs.fill(i16::MIN);
+        for frame in pcm.samples[start * channels..end * channels].chunks_exact(channels) {
+            if waveform.channels() == 1 {
+                let sample = (frame.iter().map(|&value| i64::from(value)).sum::<i64>()
+                    / channels as i64) as i16;
+                mins[0] = mins[0].min(sample);
+                maxs[0] = maxs[0].max(sample);
+            } else {
+                for (channel, &sample) in frame.iter().enumerate() {
+                    mins[channel] = mins[channel].min(sample);
+                    maxs[channel] = maxs[channel].max(sample);
+                }
+            }
+        }
+        flush_frame(waveform, &mins, &maxs)?;
+    }
+    Ok(())
 }
 
 /// Generates a waveform from raw audio bytes.
