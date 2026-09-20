@@ -1,5 +1,8 @@
+#[cfg(any(feature = "render", feature = "wav-output"))]
 use std::fs::File;
-use std::io::{self, Cursor, Read, Write};
+#[cfg(any(feature = "render", feature = "wav-output"))]
+use std::io::Write;
+use std::io::{self, Cursor, Read};
 use std::path::Path;
 use std::process::ExitCode;
 use std::str::FromStr;
@@ -796,6 +799,7 @@ fn write_waveform_output(
     .map_err(stringify_error)
 }
 
+#[cfg(any(feature = "render", feature = "wav-output"))]
 fn create_output(filename: Option<&str>) -> Result<Box<dyn Write>, String> {
     if is_stdio_filename(filename) {
         Ok(Box::new(io::stdout()))
