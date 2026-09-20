@@ -188,6 +188,8 @@ Audio output:
 - Waveform file formats: [doc/DataFormat.md](doc/DataFormat.md)
 - CLI man page: [doc/audiowaveform.1](doc/audiowaveform.1)
 - Waveform format man page: [doc/audiowaveform.5](doc/audiowaveform.5)
+- Project release history: [CHANGELOG.md](CHANGELOG.md)
+- Ruby gem release history: [bindings/ruby/CHANGELOG.md](bindings/ruby/CHANGELOG.md)
 
 Generate local API docs with:
 
