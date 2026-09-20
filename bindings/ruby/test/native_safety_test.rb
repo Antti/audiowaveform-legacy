@@ -73,8 +73,8 @@ class NativeSafetyTest < Minitest::Test
         12.times do
           AudioWaveform.generate(ARGV.fetch(0), samples_per_pixel: 2)
           # Let MRI evaluate malloc pressure at a Ruby-managed allocation.
-          # Reusing existing Ruby heap slots need not trigger that check.
-          Array.new(128)
+          # Small arrays can use Ruby 3.2's transient heap and skip that check.
+          String.new(capacity: 1024)
         end
         abort "discarded native buffers did not trigger GC" if GC.count == before
       RUBY
