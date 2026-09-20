@@ -233,6 +233,11 @@ impl Waveform {
         &self.data
     }
 
+    /// Returns the heap allocation size of the sample buffer, including unused capacity.
+    pub fn allocated_bytes(&self) -> usize {
+        self.data.capacity() * std::mem::size_of::<i16>()
+    }
+
     /// Returns a copy of the waveform with its serialized bit-depth preference changed.
     pub fn with_storage_bits(mut self, bits: u8) -> Result<Self, Error> {
         Self::validate_storage_bits(bits)?;

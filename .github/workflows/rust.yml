@@ -30,23 +30,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: default
-            command: cargo test -p audiowaveform
-          - name: no-default-features
-            command: cargo test -p audiowaveform --no-default-features
-          - name: decode
-            command: cargo test -p audiowaveform --no-default-features --features decode
-          - name: render
-            command: cargo test -p audiowaveform --no-default-features --features render
-          - name: wav
-            command: cargo test -p audiowaveform --no-default-features --features wav
+        features:
+          - ""
+          - decode
+          - format-aac
+          - format-aiff
+          - format-caf
+          - format-flac
+          - format-m4a
+          - format-mp4
+          - format-mkv
+          - format-webm
+          - format-mp1
+          - format-mp2
+          - format-mp3
+          - format-ogg
+          - format-wav
+          - render
+          - wav-output
+          - all-formats,render,wav-output
 
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run ${{ matrix.name }}
-        run: ${{ matrix.command }}
+      - name: Test library features
+        run: cargo test -p audiowaveform --no-default-features --features "${{ matrix.features }}"
+
+  cli-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        features: ["", "format-mp3,format-m4a", "render", "wav-output"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test CLI features
+        run: cargo test -p audiowaveform-cli --no-default-features --features "${{ matrix.features }}"
 
   workspace:
     runs-on: ubuntu-latest

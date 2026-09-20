@@ -1,14 +1,19 @@
 mod support;
 
+#[cfg(feature = "format-wav")]
 use std::io::Cursor;
 
 use audiowaveform::{
-    GenerateOptions, RawAudioConfig, RawSampleFormat, ScaleSpec, WaveformFormat,
-    decode_audio_from_path, generate_waveform_from_path, generate_waveform_from_raw_reader,
+    GenerateOptions, ScaleSpec, WaveformFormat, decode_audio_from_path, generate_waveform_from_path,
 };
 
-use self::support::{assert_bytes_eq, fixture_path, read_fixture};
+#[cfg(feature = "format-wav")]
+use self::support::read_fixture;
+use self::support::{assert_bytes_eq, fixture_path};
+#[cfg(feature = "format-wav")]
+use audiowaveform::{RawAudioConfig, RawSampleFormat, generate_waveform_from_raw_reader};
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn generates_expected_binary_waveform_from_wav() {
     let waveform = generate_waveform_from_path(
@@ -40,6 +45,13 @@ fn decodes_supported_audio_inputs_with_expected_metadata() {
     ];
 
     for (fixture, sample_rate, channels, frames) in cases {
+        if audiowaveform::AudioFormat::from_path(fixture)
+            .unwrap()
+            .ensure_enabled()
+            .is_err()
+        {
+            continue;
+        }
         let pcm = decode_audio_from_path(fixture_path(fixture)).expect("decode audio");
         assert_eq!(pcm.sample_rate(), sample_rate, "{fixture}");
         assert_eq!(pcm.channels(), channels, "{fixture}");
@@ -73,6 +85,13 @@ fn generates_expected_waveform_bytes_from_supported_audio_inputs() {
     ];
 
     for (input, dat_fixture, json_fixture) in cases {
+        if audiowaveform::AudioFormat::from_path(input)
+            .unwrap()
+            .ensure_enabled()
+            .is_err()
+        {
+            continue;
+        }
         let waveform = generate_waveform_from_path(
             fixture_path(input),
             &GenerateOptions {
@@ -97,6 +116,7 @@ fn generates_expected_waveform_bytes_from_supported_audio_inputs() {
     }
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn generates_expected_waveform_from_float_wav_audio() {
     let waveform = generate_waveform_from_path(
@@ -116,6 +136,7 @@ fn generates_expected_waveform_from_float_wav_audio() {
     assert_bytes_eq(&dat, "test_file_mono_float32_8bit_64spp.dat");
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn generates_expected_waveform_from_raw_audio() {
     let raw = read_fixture("test_file_mono.raw");
@@ -136,6 +157,7 @@ fn generates_expected_waveform_from_raw_audio() {
     assert_eq!(waveform_from_raw, waveform_from_wav);
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn generates_expected_split_channel_and_auto_scaled_waveforms() {
     let split = generate_waveform_from_path(
@@ -168,6 +190,7 @@ fn generates_expected_split_channel_and_auto_scaled_waveforms() {
     assert_bytes_eq(&auto_dat, "test_file_stereo_8bit_64spp_wav_auto_scale.dat");
 }
 
+#[cfg(feature = "format-wav")]
 #[test]
 fn reader_based_generation_matches_path_based_generation() {
     let bytes = read_fixture("test_file_stereo.wav");

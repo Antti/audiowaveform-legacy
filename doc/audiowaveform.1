@@ -11,8 +11,10 @@ audiowaveform \- generates and renders waveforms from audio files
 .SH DESCRIPTION
 
 .B audiowaveform
-generates waveform data from MP3, WAV, FLAC, Ogg Vorbis, and raw PCM audio
-sources. Waveform data can be used to produce a visual rendering of the audio,
+generates waveform data from AAC-LC, ALAC, MPEG audio, WAV, FLAC, Ogg,
+AIFF, CAF, MP4/M4A, Matroska/WebM, and raw PCM audio sources.
+Opus and HE-AAC decoding are not supported. Custom builds can omit input formats,
+PNG rendering, or WAV writing through Cargo features. Waveform data can be used to produce a visual rendering of the audio,
 similar in appearance to audio editing applications.
 
 Waveform data files are saved in either binary format (.dat) or JSON (.json).
@@ -55,10 +57,11 @@ Disable status messages.
 
 .TP
 .B --input-filename\fR, \fB-i\fR <filename>
-Input filename, which should be a MP3, WAV, FLAC, Ogg Vorbis, raw audio file,
-or a binary or JSON format waveform data file. By default, \fBaudiowaveform\fR
-uses the file extension to decide how to read the input file (either .mp3, .wav,
-\&.flac, .ogg, .oga, .raw, .dat, or .json as appropriate), but this can be
+Input filename, which should be an audio file or a binary or JSON waveform data
+file. By default, \fBaudiowaveform\fR uses the extension to identify the container
+(.aac, .adts, .mp1, .mp2, .mp3, .wav, .w64, .flac, .ogg, .oga, .aiff, .aif,
+\&.aifc, .caf, .mp4, .m4a, .m4b, .m4r, .m4v, .mov, .mkv, .mka, .webm,
+\&.raw, .dat, or .json). This can be
 overridden by the \fB--input-format\fR option. If the \fB--input-filename\fR
 option is \fB-\fR or is omitted, \fBaudiowaveform\fR reads from standard input,
 and the \fB--input-format\fR option must be used to specify the data format.
@@ -75,7 +78,9 @@ by the \fB--output-format\fR option. If the \fB--output-filename\fR option is
 
 .TP
 .B --input-format\fR <format>
-Input data format, either \fBwav\fR, \fBmp3\fR, \fBflac\fR, \fBogg\fR,
+Input data format: \fBaac\fR, \fBaiff\fR, \fBcaf\fR, \fBmp4\fR
+(alias \fBm4a\fR), \fBmkv\fR (alias \fBwebm\fR), \fBmp1\fR,
+\fBmp2\fR, \fBmp3\fR, \fBwav\fR, \fBflac\fR, \fBogg\fR,
 \fBraw\fR, \fBdat\fR, or \fBjson\fR. This option must be used when reading
 from standard input. It may also be used to set the input file format, instead
 of it being determined from the file extension from the \fB--input-filename\fR

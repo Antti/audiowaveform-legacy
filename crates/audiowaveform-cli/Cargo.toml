@@ -11,8 +11,28 @@ description = "Command-line interface for the Rust audiowaveform library"
 name = "audiowaveform"
 path = "src/main.rs"
 
+[features]
+default = ["all-formats", "render", "wav-output"]
+decode = ["audiowaveform/decode"]
+all-formats = ["format-aac", "format-aiff", "format-caf", "format-flac", "format-m4a", "format-mkv", "format-mp1", "format-mp2", "format-mp3", "format-ogg", "format-wav"]
+format-aac = ["decode", "audiowaveform/format-aac"]
+format-aiff = ["decode", "audiowaveform/format-aiff"]
+format-caf = ["decode", "audiowaveform/format-caf"]
+format-flac = ["decode", "audiowaveform/format-flac"]
+format-m4a = ["decode", "audiowaveform/format-m4a"]
+format-mp4 = ["format-m4a"]
+format-mkv = ["decode", "audiowaveform/format-mkv"]
+format-webm = ["format-mkv"]
+format-mp1 = ["decode", "audiowaveform/format-mp1"]
+format-mp2 = ["decode", "audiowaveform/format-mp2"]
+format-mp3 = ["decode", "audiowaveform/format-mp3"]
+format-ogg = ["decode", "audiowaveform/format-ogg"]
+format-wav = ["decode", "audiowaveform/format-wav"]
+render = ["audiowaveform/render"]
+wav-output = ["audiowaveform/wav-output"]
+
 [dependencies]
-audiowaveform = { path = "../audiowaveform" }
+audiowaveform = { path = "../audiowaveform", default-features = false }
 clap.workspace = true
 
 [dev-dependencies]

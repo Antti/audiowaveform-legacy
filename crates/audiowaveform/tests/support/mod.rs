@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use audiowaveform::Waveform;
-#[cfg(feature = "wav")]
+#[cfg(feature = "wav-output")]
 use hound::WavReader;
 use image::{RgbaImage, load_from_memory};
 use tempfile::{Builder, NamedTempFile};
@@ -39,7 +39,7 @@ pub fn assert_file_bytes_eq(actual: impl AsRef<Path>, fixture: &str) {
     assert_bytes_eq(&actual, fixture);
 }
 
-#[cfg(feature = "wav")]
+#[cfg(feature = "wav-output")]
 pub fn assert_wav_file_matches_fixture(
     actual: impl AsRef<Path>,
     fixture: &str,
@@ -78,7 +78,7 @@ pub fn assert_png_image_matches_fixture(actual: &RgbaImage, fixture: &str) {
     );
 }
 
-#[cfg(feature = "wav")]
+#[cfg(feature = "wav-output")]
 fn assert_wav_eq<R1: std::io::Read, R2: std::io::Read>(
     mut actual: WavReader<R1>,
     mut expected: WavReader<R2>,

@@ -9,7 +9,7 @@ description = "Audio waveform generation, serialization, rendering, and transcod
 
 [[example]]
 name = "generate_waveform"
-required-features = ["decode"]
+required-features = ["format-mp3"]
 
 [[example]]
 name = "render_waveform"
@@ -31,13 +31,30 @@ required-features = ["render"]
 
 [[test]]
 name = "wav"
-required-features = ["wav"]
+required-features = ["wav-output"]
 
 [features]
-default = ["decode", "render", "wav"]
+default = []
 decode = ["dep:symphonia"]
+all-formats = ["format-aac", "format-aiff", "format-caf", "format-flac", "format-m4a", "format-mkv", "format-mp1", "format-mp2", "format-mp3", "format-ogg", "format-wav"]
+format-aac = ["decode", "symphonia/aac"]
+format-aiff = ["decode", "symphonia/aiff", "symphonia/pcm"]
+format-caf = ["decode", "symphonia/caf", "symphonia/alac", "symphonia/pcm"]
+format-flac = ["decode", "symphonia/flac"]
+format-m4a = ["decode", "symphonia/isomp4", "symphonia/aac", "symphonia/alac", "symphonia/mp3", "symphonia/pcm"]
+format-mp4 = ["format-m4a"]
+format-mkv = ["decode", "symphonia/mkv", "symphonia/aac", "symphonia/flac", "symphonia/mpa", "symphonia/pcm", "symphonia/vorbis"]
+format-webm = ["format-mkv"]
+format-mp1 = ["decode", "symphonia/mp1"]
+format-mp2 = ["decode", "symphonia/mp2"]
+format-mp3 = ["decode", "symphonia/mp3"]
+format-ogg = ["decode", "symphonia/ogg", "symphonia/vorbis", "symphonia/flac"]
+format-wav = ["decode", "symphonia/wav", "symphonia/pcm", "symphonia/adpcm"]
 render = ["dep:image", "dep:png"]
-wav = ["dep:hound"]
+wav-output = ["dep:hound"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 byteorder.workspace = true

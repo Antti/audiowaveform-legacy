@@ -1,4 +1,4 @@
-#![cfg(feature = "wav")]
+#![cfg(feature = "wav-output")]
 
 mod support;
 
@@ -6,7 +6,7 @@ use std::io::Cursor;
 
 use audiowaveform::{PcmAudio, write_pcm_as_wav};
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "format-mp3")]
 use self::support::{assert_wav_file_matches_fixture, fixture_path, named_temp_file};
 
 #[test]
@@ -38,7 +38,7 @@ fn writes_expected_pcm_wav_structure() {
     );
 }
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "format-mp3")]
 #[test]
 fn transcodes_audio_to_expected_wav_fixture() {
     let output = named_temp_file(".wav");

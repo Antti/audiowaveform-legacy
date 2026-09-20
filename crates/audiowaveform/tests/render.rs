@@ -4,7 +4,7 @@ use audiowaveform::{
     AmplitudeScale, Color, ColorScheme, RenderOptions, RenderStyle, ScaleSpec, WaveformColors,
     render_waveform,
 };
-#[cfg(feature = "decode")]
+#[cfg(feature = "format-wav")]
 use audiowaveform::{GenerateOptions, generate_waveform_from_path};
 
 use self::support::{assert_png_image_matches_fixture, load_waveform};
@@ -154,7 +154,7 @@ fn renders_waveforms_with_custom_colors() {
     assert_png_image_matches_fixture(&custom, "test_file_stereo_dat_128spp_colors.png");
 }
 
-#[cfg(feature = "decode")]
+#[cfg(feature = "format-wav")]
 #[test]
 fn renders_audio_pipeline_waveform_images() {
     let stereo = generate_waveform_from_path(
@@ -194,7 +194,7 @@ fn renders_audio_pipeline_waveform_images() {
     assert_png_image_matches_fixture(&split_image, "test_file_stereo_wav_split_channels.png");
 }
 
-#[cfg(feature = "decode")]
+#[cfg(all(feature = "format-wav", feature = "format-mp3"))]
 #[test]
 fn renders_fit_width_waveform_images_from_audio() {
     let wav = generate_waveform_from_path(

@@ -2,3 +2,12 @@ build/
 target/
 audiowaveform-rs/
 .cargo-home/
+Gemfile.lock
+bindings/ruby/lib/audiowaveform/*.bundle
+bindings/ruby/lib/audiowaveform/*.so
+bindings/ruby/lib/audiowaveform/*/*.bundle
+bindings/ruby/lib/audiowaveform/*/*.so
+bindings/ruby/pkg/
+bindings/ruby/tmp/
+/pkg/
+/tmp/

@@ -1,35 +1,41 @@
 # audiowaveform
 
-[![CI](https://github.com/fetlife/audiowaveform/actions/workflows/rust.yml/badge.svg)](https://github.com/fetlife/audiowaveform/actions/workflows/rust.yml)
+[![CI](https://github.com/Antti/audiowaveform/actions/workflows/rust.yml/badge.svg)](https://github.com/Antti/audiowaveform/actions/workflows/rust.yml)
 
 `audiowaveform` is a Rust library and CLI for generating waveform data from audio,
 serializing waveform files, rendering PNG waveform images, and transcoding audio
 to PCM16 WAV.
 
 This repository is the canonical home of the Rust rewrite:
-[github.com/fetlife/audiowaveform](https://github.com/fetlife/audiowaveform).
+[github.com/Antti/audiowaveform](https://github.com/Antti/audiowaveform).
 
 It is a Rust rewrite of the original BBC `audiowaveform` project:
 [github.com/bbc/audiowaveform](https://github.com/bbc/audiowaveform).
 The original project was created by Chris Needham and contributors at BBC
 Research & Development.
 
-The repository contains a Rust-only workspace:
+The repository's main workspace remains Rust-only:
 
 - `crates/audiowaveform`: reusable library crate
 - `crates/audiowaveform-cli`: thin `audiowaveform` command-line wrapper
+
+Ruby applications can use the native extension in `bindings/ruby` to generate
+waveforms in process through the same library crate.
 
 ![Example Waveform](doc/example.png "Example Waveform")
 
 ## Features
 
-- Decode MP3, WAV, FLAC, Ogg/Vorbis, and raw PCM or floating-point audio
+- Decode AAC-LC, ALAC, MP1/MP2/MP3, WAV, FLAC, Ogg, AIFF, CAF, and audio in MP4/Matroska/WebM containers
 - Generate `.dat`, `.json`, and `.txt` waveform files
 - Render PNG waveform images in pure Rust
 - Transcode decoded audio or raw PCM input to PCM16 WAV
 - Use path-based, stream-based, or in-memory APIs from the library crate
 
-Opus is intentionally unsupported in the current Rust implementation.
+Opus and HE-AAC are unsupported by the current decoder. AAC-LC supports mono and
+stereo. Enabling a container such as WebM does not add unsupported codecs.
+AAC/MP4 decoding does not apply gapless trimming, so decoded audio and waveform
+duration can include encoder delay and padding.
 
 ## Quick Start
 
@@ -59,6 +65,36 @@ cargo test --workspace
 
 ## Library Usage
 
+The Rust library has **no default features**. PCM/raw waveform generation,
+waveform serialization, and resampling are always available. Enable input formats
+and output capabilities explicitly:
+
+```toml
+[dependencies]
+audiowaveform = { version = "1.10.3", features = ["format-mp3", "format-m4a"] }
+```
+
+| Cargo feature | Capability |
+| --- | --- |
+| `format-aac` | AAC-LC in ADTS (`.aac`, `.adts`) |
+| `format-aiff` | PCM in AIFF/AIFF-C (`.aiff`, `.aif`, `.aifc`) |
+| `format-caf` | PCM and ALAC in CAF |
+| `format-flac` | FLAC |
+| `format-m4a` / `format-mp4` | AAC-LC, ALAC, MP3, and PCM in MP4/M4A/MOV containers |
+| `format-mkv` / `format-webm` | Supported audio codecs in Matroska/WebM (`.mkv`, `.mka`, `.webm`); no Opus |
+| `format-mp1`, `format-mp2`, `format-mp3` | MPEG audio layers I, II, and III respectively |
+| `format-ogg` | Vorbis and FLAC in Ogg (`.ogg`, `.oga`) |
+| `format-wav` | PCM and ADPCM in WAV/W64 |
+| `all-formats` | All input format bundles above |
+| `render` | PNG rendering |
+| `wav-output` | PCM16 WAV writing |
+
+`format-mp4` aliases `format-m4a`; `format-webm` aliases `format-mkv`.
+Format features enable the shared `decode` plumbing automatically. `decode`
+alone does not enable any codecs or containers. `all-formats` does not enable
+PNG rendering or WAV writing. Cargo features are additive: another dependency
+can enable additional features in a shared build.
+
 Generate waveform data from an audio file:
 
 ```rust,no_run
@@ -71,7 +107,7 @@ fn main() -> Result<(), audiowaveform::Error> {
 }
 ```
 
-Render a PNG from a stored waveform:
+Render a PNG from a stored waveform (requires `render`):
 
 ```rust,no_run
 use std::fs::File;
@@ -100,7 +136,37 @@ fn main() -> Result<(), audiowaveform::Error> {
 
 Additional examples live in `crates/audiowaveform/examples`.
 
+## Ruby Usage
+
+Install the `audiowaveform` gem from RubyGems and generate waveform
+data without invoking the command-line program:
+
+```ruby
+gem "audiowaveform", "~> 0.1"
+```
+
+```ruby
+require "audiowaveform"
+
+waveform = AudioWaveform.generate("input.mp3", samples_per_pixel: 256)
+waveform.save("output.dat", bits: 8)
+```
+
+See [`bindings/ruby/README.md`](bindings/ruby/README.md) for the full Ruby API
+and development instructions.
+
 ## CLI Usage
+
+The CLI defaults to `all-formats`, `render`, and `wav-output`. To build a smaller
+CLI, disable defaults and enable only the features you need:
+
+```sh
+cargo build -p audiowaveform-cli --no-default-features --features format-mp3,format-m4a
+```
+
+Add `render` or `wav-output` for those outputs. With no features, the CLI can
+still process raw PCM and convert/resample waveform data. Requests for omitted
+formats or outputs report the required Cargo feature.
 
 Generate `.dat` waveform data:
 
@@ -136,7 +202,12 @@ audiowaveform --help
 
 Audio input:
 
-- `mp3`
+- `aac` and `adts` (AAC-LC)
+- `mp1`, `mp2`, and `mp3`
+- `mp4`, `m4a`, `m4b`, `m4r`, `m4v`, and `mov` (supported audio tracks only)
+- `mkv`, `mka`, and `webm` (supported audio tracks only; no Opus)
+- `aiff`, `aif`, and `aifc`
+- `caf`
 - `wav` and `w64`
 - `flac`
 - `ogg` and `oga`
@@ -166,11 +237,13 @@ Audio output:
 - Waveform file formats: [doc/DataFormat.md](doc/DataFormat.md)
 - CLI man page: [doc/audiowaveform.1](doc/audiowaveform.1)
 - Waveform format man page: [doc/audiowaveform.5](doc/audiowaveform.5)
+- Project release history: [CHANGELOG.md](CHANGELOG.md)
+- Ruby gem release history: [bindings/ruby/CHANGELOG.md](bindings/ruby/CHANGELOG.md)
 
 Generate local API docs with:
 
 ```sh
-cargo doc --workspace --no-deps
+cargo doc -p audiowaveform --all-features --no-deps
 ```
 
 ## Contributing
