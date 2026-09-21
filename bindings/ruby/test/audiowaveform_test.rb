@@ -236,6 +236,15 @@ class AudioWaveformTest < Minitest::Test
     end
   end
 
+  def test_scale_values_have_consistent_bounds_and_error_types
+    [:samples_per_pixel, :pixels_per_second, :points].each do |keyword|
+      [false, true, 2**32, -1, 1.5, "110"].each do |value|
+        # Validation must precede opening even a nonexistent path.
+        assert_raises(ArgumentError) { AudioWaveform.generate("missing.wav", **{keyword => value}) }
+      end
+    end
+  end
+
   def test_validates_options
     input = fixture("test_file_mono.wav")
 

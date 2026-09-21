@@ -52,8 +52,8 @@ waveform.data              # => interleaved [min, max, ...] samples
 
 | Keyword | Default | Description |
 | --- | --- | --- |
-| `samples_per_pixel` | `256` | Number of source samples represented by each waveform point. Must be at least 2. |
-| `pixels_per_second` | none | Time-based scale. Cannot be combined with `samples_per_pixel`. |
+| `samples_per_pixel` | `256` | Number of source samples represented by each waveform point. Integer from 2 to 4294967295. |
+| `pixels_per_second` | none | Time-based scale. Integer from 1 to 4294967295; cannot be combined with another scale keyword. |
 | `points` | none | Exact number of min/max pairs per channel for nonempty audio. Positive integer; mutually exclusive with the other scale options. |
 | `split_channels` | `false` | Preserve separate audio channels instead of mixing them down. |
 | `amplitude_scale` | none | Non-negative numeric multiplier, or `:auto` to normalize automatically. |
@@ -149,7 +149,8 @@ in Matroska/WebM. No FFmpeg installation is required for decoding.
 
 AAC-LC supports mono and stereo. Wave64 (`.w64`), HE-AAC, and Opus remain
 unsupported, including Opus inside Ogg/WebM/MP4. Raw PCM input is not currently
-exposed by the gem.
+exposed by the gem. WAV input supports up to 18 positioned channels and rejects
+inconsistent nonzero speaker masks.
 The filename extension identifies the container; an enabled container can still
 contain an unsupported codec. Such files raise `AudioWaveform::Error`.
 AAC/MP4 waveform duration can include encoder delay and padding; gapless

@@ -6,6 +6,22 @@ are kept here as release history context.
 
 ## Unreleased
 
+- Decode ID3-prefixed ADTS/AAC without invoking Symphonia's unsafe duration
+  estimator, and reject unsupported WAV channel counts and inconsistent masks
+  before demuxing. Retry interrupted encoded reads.
+- Retain known speaker layouts in decoded PCM and WAV transcoding, including
+  side-surround and nonstandard mono/stereo positions. Write WAV samples in
+  bounded blocks instead of buffering another copy of the entire output.
+- Correct exact-point render offsets at point boundaries and the clip end.
+- Enforce signed DAT sample-rate/scale limits before reading or writing; correct
+  the documented version-2 payload offsets.
+- Apply CLI amplitude scaling to waveform conversion/resampling and enable TXT
+  output for audio generation and resampling. Accept spaced `--compression -1`.
+- Validate generation options before input I/O, and use wide frame coordinates
+  for resampling on 32-bit platforms.
+- Remove per-point heap allocations, reuse owned waveform storage for amplitude
+  scaling, skip PCM conversion in counting passes, and reuse integer conversion
+  buffers between decoded packets.
 - Grow DAT sample storage only as payload is read instead of reserving memory
   from an untrusted length header; check length arithmetic for overflow.
 - Preserve existing output files when WAV decoding or PNG option validation

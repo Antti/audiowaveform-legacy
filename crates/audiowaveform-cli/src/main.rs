@@ -151,7 +151,7 @@ struct Cli {
     amplitude_scale: String,
 
     /// Set PNG compression level from `-1` to `9`.
-    #[arg(long = "compression", default_value_t = -1)]
+    #[arg(long = "compression", default_value_t = -1, allow_negative_numbers = true)]
     compression: i32,
 
     /// Set raw input sample rate in Hz.
@@ -475,7 +475,10 @@ fn run(cli: Cli) -> Result<(), String> {
             .map_err(stringify_error)?;
         }
     } else if input_format.is_audio_input()
-        && matches!(output_format, CliFormat::Dat | CliFormat::Json)
+        && matches!(
+            output_format,
+            CliFormat::Dat | CliFormat::Json | CliFormat::Txt
+        )
     {
         let waveform = generate_waveform_from_input(
             cli.input_filename.as_deref(),
@@ -501,23 +504,21 @@ fn run(cli: Cli) -> Result<(), String> {
             output_format,
             CliFormat::Dat | CliFormat::Json | CliFormat::Txt
         )
-        && !has_resample
     {
         let waveform = load_waveform_input(cli.input_filename.as_deref(), input_format)?;
+        let waveform = if has_resample {
+            waveform.resample(scale).map_err(stringify_error)?
+        } else {
+            waveform
+        };
+        let waveform = waveform
+            .into_scaled_amplitude(match amplitude {
+                ParsedAmplitudeScale::Auto => AmplitudeScale::Auto,
+                ParsedAmplitudeScale::Fixed(value) => AmplitudeScale::Fixed(value),
+            })
+            .map_err(stringify_error)?;
         write_waveform_output(
             &waveform,
-            cli.output_filename.as_deref(),
-            output_format.as_waveform_format().expect("waveform format"),
-            bits.map(|bits| bits as u8),
-        )?;
-    } else if input_format.is_waveform_input()
-        && matches!(output_format, CliFormat::Dat | CliFormat::Json)
-        && has_resample
-    {
-        let waveform = load_waveform_input(cli.input_filename.as_deref(), input_format)?;
-        let resampled = waveform.resample(scale).map_err(stringify_error)?;
-        write_waveform_output(
-            &resampled,
             cli.output_filename.as_deref(),
             output_format.as_waveform_format().expect("waveform format"),
             bits.map(|bits| bits as u8),

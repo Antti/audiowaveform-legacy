@@ -21,13 +21,15 @@ use symphonia::core::meta::MetadataOptions;
 #[cfg(feature = "decode")]
 use symphonia::core::probe::Hint;
 #[cfg(feature = "decode")]
-use symphonia::default::{get_codecs, get_probe};
+use symphonia::default::get_codecs;
 
 #[cfg(feature = "decode")]
 use crate::AudioFormat;
-use crate::{AmplitudeScale, Error, Waveform, WaveformPoint};
+use crate::{AmplitudeScale, Error, Waveform};
 
 mod peaks;
+#[cfg(feature = "decode")]
+mod probe;
 use peaks::{PeakAccumulator, needs_frame_count};
 
 #[cfg(feature = "decode")]
@@ -46,7 +48,12 @@ impl<R> ReadSeekMediaSource<R> {
 #[cfg(feature = "decode")]
 impl<R: Read> Read for ReadSeekMediaSource<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.inner.read(buf)
+        loop {
+            match self.inner.read(buf) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
     }
 }
 
@@ -73,6 +80,7 @@ impl<R: Read + Seek + Send + Sync> MediaSource for ReadSeekMediaSource<R> {
 pub struct PcmAudio {
     sample_rate: u32,
     channels: u16,
+    channel_mask: Option<u32>,
     samples: Vec<i16>,
 }
 
@@ -100,6 +108,7 @@ impl PcmAudio {
         Ok(Self {
             sample_rate,
             channels,
+            channel_mask: (channels <= 18).then(|| (1_u32 << channels) - 1),
             samples,
         })
     }
@@ -112,6 +121,24 @@ impl PcmAudio {
     /// Returns the channel count.
     pub const fn channels(&self) -> u16 {
         self.channels
+    }
+
+    /// Returns the speaker mask in WAV bit order, when the layout is known.
+    /// Constructed PCM uses the lowest `channels` speaker bits for up to 18 channels.
+    pub const fn channel_mask(&self) -> Option<u32> {
+        self.channel_mask
+    }
+
+    /// Sets a WAV speaker layout without changing the interleaved sample order.
+    pub fn with_channel_mask(mut self, mask: u32) -> Result<Self, Error> {
+        if mask & !0x3ffff != 0 || mask.count_ones() != u32::from(self.channels) {
+            return Err(Error::invalid_argument(
+                "channel mask",
+                "Speaker mask must contain one supported WAV position per channel",
+            ));
+        }
+        self.channel_mask = Some(mask);
+        Ok(self)
     }
 
     /// Returns the interleaved PCM samples.
@@ -154,6 +181,10 @@ impl ScaleSpec {
     /// Resolves the scale to a concrete number of samples per waveform point.
     /// For `Points`, returns a nominal integer scale, rounded down with a minimum of 2.
     pub fn resolve(self, sample_rate: u32, frame_count: usize) -> Result<u32, Error> {
+        self.resolve_frames(sample_rate, frame_count as u64)
+    }
+
+    pub(crate) fn resolve_frames(self, sample_rate: u32, frame_count: u64) -> Result<u32, Error> {
         let resolved = match self {
             Self::Points(points) => {
                 if points == 0 {
@@ -162,7 +193,7 @@ impl ScaleSpec {
                         "Invalid points: must be greater than zero",
                     ));
                 }
-                u32::try_from((frame_count as u64 / u64::from(points)).max(2)).map_err(|_| {
+                u32::try_from((frame_count / u64::from(points)).max(2)).map_err(|_| {
                     Error::invalid_argument("points", "Too many source frames per point")
                 })?
             }
@@ -208,7 +239,7 @@ impl ScaleSpec {
                     }
                     frames as u64
                 } else {
-                    frame_count as u64
+                    frame_count
                 };
                 u32::try_from(frames / u64::from(width_pixels)).map_err(|_| {
                     Error::invalid_argument("image width", "Too many source frames per pixel")
@@ -242,6 +273,60 @@ impl Default for GenerateOptions {
             split_channels: false,
             amplitude_scale: None,
         }
+    }
+}
+
+impl GenerateOptions {
+    // Validate before any decoding, counting, or temporary-file I/O. Sample-rate
+    // dependent resolution is checked once the source metadata is available.
+    fn validate(&self) -> Result<(), Error> {
+        match self.scale {
+            ScaleSpec::Points(0) => {
+                return Err(Error::invalid_argument(
+                    "points",
+                    "Invalid points: must be greater than zero",
+                ));
+            }
+            ScaleSpec::SamplesPerPixel(0 | 1) => {
+                return Err(Error::invalid_argument("zoom", "Invalid zoom: minimum 2"));
+            }
+            ScaleSpec::PixelsPerSecond(0) => {
+                return Err(Error::invalid_argument(
+                    "pixels per second",
+                    "Invalid pixels per second: must be greater than zero",
+                ));
+            }
+            ScaleSpec::FitWidth {
+                width_pixels,
+                time_range,
+            } => {
+                if width_pixels == 0 {
+                    return Err(Error::invalid_argument(
+                        "image width",
+                        "Invalid image width: minimum 1",
+                    ));
+                }
+                if let Some((start, end)) = time_range {
+                    if !start.is_finite() || start < 0.0 {
+                        return Err(Error::invalid_argument(
+                            "start time",
+                            "Invalid start time: minimum 0",
+                        ));
+                    }
+                    if !end.is_finite() || end <= start {
+                        return Err(Error::invalid_argument(
+                            "end time",
+                            "Invalid end time: must be finite and greater than the start time",
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+        if let Some(scale) = self.amplitude_scale {
+            scale.validate()?;
+        }
+        Ok(())
     }
 }
 
@@ -361,6 +446,7 @@ pub fn generate_waveform_from_pcm(
     pcm: &PcmAudio,
     options: &GenerateOptions,
 ) -> Result<Waveform, Error> {
+    options.validate()?;
     let mut peaks =
         PeakAccumulator::new(pcm.sample_rate, pcm.channels, pcm.frame_count(), options)?;
     peaks.push(&pcm.samples)?;
@@ -375,6 +461,7 @@ pub fn generate_waveform_from_raw_reader<R: Read>(
     config: &RawAudioConfig,
     options: &GenerateOptions,
 ) -> Result<Waveform, Error> {
+    options.validate()?;
     RawAudioConfig::new(config.sample_rate, config.channels, config.sample_format)?;
     if needs_frame_count(options.scale) {
         // The public raw-reader API accepts pipes. Spool bytes to disk so an
@@ -411,6 +498,7 @@ pub fn generate_waveform_from_path(
     path: impl AsRef<Path>,
     options: &GenerateOptions,
 ) -> Result<Waveform, Error> {
+    options.validate()?;
     let path = path.as_ref();
     let format = AudioFormat::from_path(path).ok_or_else(|| Error::UnsupportedFormat {
         format: path
@@ -449,6 +537,7 @@ pub fn generate_waveform_from_reader<R: Read + Seek + Send + Sync + 'static>(
     format_hint: Option<AudioFormat>,
     options: &GenerateOptions,
 ) -> Result<Waveform, Error> {
+    options.validate()?;
     let mut reader = reader;
     let count_frames = needs_frame_count(options.scale);
     let start = if count_frames {
@@ -456,9 +545,10 @@ pub fn generate_waveform_from_reader<R: Read + Seek + Send + Sync + 'static>(
     } else {
         0
     };
-    let mut source = media_source_stream(reader);
+    let mut source = media_source_stream(reader)?;
     let expected = if count_frames {
-        let (info, returned_source) = decode_audio_stream(source, format_hint, |_, _, _| Ok(()))?;
+        let (info, returned_source) =
+            decode_audio_stream(source, format_hint, true, |_, _, _| Ok(()))?;
         source = returned_source;
         source.seek(SeekFrom::Start(start))?;
         Some(info)
@@ -467,20 +557,25 @@ pub fn generate_waveform_from_reader<R: Read + Seek + Send + Sync + 'static>(
     };
 
     let mut peaks = None;
-    let (info, _) = decode_audio_stream(source, format_hint, |sample_rate, channels, samples| {
-        if peaks.is_none() {
-            peaks = Some(PeakAccumulator::new(
-                sample_rate,
-                channels,
-                expected.map_or(0, |info| info.frames),
-                options,
-            )?);
-        }
-        peaks
-            .as_mut()
-            .expect("initialized accumulator")
-            .push(samples)
-    })?;
+    let (info, _) = decode_audio_stream(
+        source,
+        format_hint,
+        false,
+        |sample_rate, channels, samples| {
+            if peaks.is_none() {
+                peaks = Some(PeakAccumulator::new(
+                    sample_rate,
+                    channels,
+                    expected.map_or(0, |info| info.frames),
+                    options,
+                )?);
+            }
+            peaks
+                .as_mut()
+                .expect("initialized accumulator")
+                .push(samples)
+        },
+    )?;
     if expected.is_some_and(|expected| expected != info) {
         return Err(Error::invalid_data(
             "Audio stream changed between decoding passes",
@@ -502,18 +597,6 @@ pub fn decode_audio_from_reader<R: Read + Seek + Send + Sync + 'static>(
     format_hint: Option<AudioFormat>,
 ) -> Result<PcmAudio, Error> {
     decode_audio_reader(reader, format_hint)
-}
-
-fn flush_frame(waveform: &mut Waveform, mins: &[i16], maxs: &[i16]) -> Result<(), Error> {
-    let points = mins
-        .iter()
-        .zip(maxs.iter())
-        .map(|(min, max)| WaveformPoint {
-            min: *min,
-            max: *max,
-        })
-        .collect::<Vec<_>>();
-    waveform.push_frame(&points)
 }
 
 fn generate_raw_stream(
@@ -636,25 +719,35 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
     format_hint: Option<AudioFormat>,
 ) -> Result<PcmAudio, Error> {
     let mut samples = Vec::new();
-    let (info, _) =
-        decode_audio_stream(media_source_stream(reader), format_hint, |_, _, block| {
+    let (info, _) = decode_audio_stream(
+        media_source_stream(reader)?,
+        format_hint,
+        false,
+        |_, _, block| {
             samples.extend_from_slice(block);
             Ok(())
-        })?;
-    PcmAudio::new(info.sample_rate, info.channels, samples)
+        },
+    )?;
+    let mut pcm = PcmAudio::new(info.sample_rate, info.channels, samples)?;
+    pcm.channel_mask = info.channel_mask.filter(|mask| mask & !0x3ffff == 0);
+    Ok(pcm)
 }
 
 #[cfg(feature = "decode")]
-fn media_source_stream<R: Read + Seek + Send + Sync + 'static>(mut reader: R) -> MediaSourceStream {
-    let byte_len = reader.stream_position().ok().and_then(|position| {
-        let len = reader.seek(SeekFrom::End(0)).ok();
-        let _ = reader.seek(SeekFrom::Start(position));
-        len
-    });
-    MediaSourceStream::new(
+fn media_source_stream<R: Read + Seek + Send + Sync + 'static>(
+    mut reader: R,
+) -> Result<MediaSourceStream, Error> {
+    let position = reader.stream_position()?;
+    let byte_len = reader.seek(SeekFrom::End(0)).ok();
+    reader.seek(SeekFrom::Start(position))?;
+    let mut source = MediaSourceStream::new(
         Box::new(ReadSeekMediaSource::new(reader, byte_len)),
         Default::default(),
-    )
+    );
+    if position != 0 {
+        source.seek(SeekFrom::Start(position))?;
+    }
+    Ok(source)
 }
 
 #[cfg(feature = "decode")]
@@ -662,6 +755,7 @@ fn media_source_stream<R: Read + Seek + Send + Sync + 'static>(mut reader: R) ->
 struct DecodedInfo {
     sample_rate: u32,
     channels: u16,
+    channel_mask: Option<u32>,
     frames: usize,
 }
 
@@ -671,6 +765,7 @@ struct DecodedInfo {
 fn decode_audio_stream(
     source: MediaSourceStream,
     format_hint: Option<AudioFormat>,
+    count_only: bool,
     mut visit: impl FnMut(u32, u16, &[i16]) -> Result<(), Error>,
 ) -> Result<(DecodedInfo, MediaSourceStream), Error> {
     let mut hint = Hint::new();
@@ -678,7 +773,7 @@ fn decode_audio_stream(
         format.ensure_enabled()?;
         hint.with_extension(format.as_str());
     }
-    let probed = get_probe().format(
+    let probed = probe::get_probe().format(
         &hint,
         source,
         &FormatOptions::default(),
@@ -709,10 +804,12 @@ fn decode_audio_stream(
     let mut channels = codec_params
         .channels
         .map(|channels| channels.count() as u16);
+    let mut channel_mask = codec_params.channels.map(|channels| channels.bits());
     let mut delay_remaining = codec_params.delay.unwrap_or(0) as usize;
     let mut decoder = get_codecs().make(&codec_params, &DecoderOptions::default())?;
 
     let mut samples = Vec::new();
+    let mut conversion: Option<SampleBuffer<i16>> = None;
     let mut saw_frames = false;
     let mut frames = 0_usize;
     loop {
@@ -748,38 +845,53 @@ fn decode_audio_stream(
                 "Invalid decoded audio sample rate or channel count",
             ));
         }
-        if saw_frames && (sample_rate != Some(spec.rate) || channels != Some(decoded_channels)) {
+        if saw_frames
+            && (sample_rate != Some(spec.rate) || channel_mask != Some(spec.channels.bits()))
+        {
             return Err(Error::invalid_data(
-                "Audio stream changes sample rate or channel count",
+                "Audio stream changes sample rate or channel layout",
             ));
         }
         // MP4 can leave channel metadata in codec configuration rather than the container track.
         sample_rate = Some(spec.rate);
         channels = Some(decoded_channels);
+        channel_mask = Some(spec.channels.bits());
 
         saw_frames |= decoded.frames() > 0;
-        samples.clear();
-        match decoded {
-            AudioBufferRef::F32(buffer) => {
-                extend_interleaved_f32_samples(buffer.as_ref(), &mut samples);
-            }
-            AudioBufferRef::F64(buffer) => {
-                extend_interleaved_f64_samples(buffer.as_ref(), &mut samples);
-            }
-            _ => {
-                let spec = *decoded.spec();
-                let mut sample_buffer = SampleBuffer::<i16>::new(decoded.capacity() as u64, spec);
-                sample_buffer.copy_interleaved_ref(decoded);
-                samples.extend_from_slice(sample_buffer.samples());
-            }
-        }
-        let block_frames = samples.len() / usize::from(decoded_channels);
+        let block_frames = decoded.frames();
         let skip = delay_remaining.min(block_frames);
         delay_remaining -= skip;
-        let samples = &samples[skip * usize::from(decoded_channels)..];
         frames = frames
             .checked_add(block_frames - skip)
             .ok_or_else(|| Error::invalid_data("Audio frame count is too large"))?;
+        if count_only || skip == block_frames {
+            continue;
+        }
+        samples.clear();
+        let interleaved = match decoded {
+            AudioBufferRef::F32(buffer) => {
+                extend_interleaved_f32_samples(buffer.as_ref(), &mut samples);
+                samples.as_slice()
+            }
+            AudioBufferRef::F64(buffer) => {
+                extend_interleaved_f64_samples(buffer.as_ref(), &mut samples);
+                samples.as_slice()
+            }
+            _ => {
+                let spec = *decoded.spec();
+                let required = decoded.capacity() * spec.channels.count();
+                if conversion
+                    .as_ref()
+                    .is_none_or(|buffer| buffer.capacity() < required)
+                {
+                    conversion = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
+                }
+                let sample_buffer = conversion.as_mut().expect("conversion buffer initialized");
+                sample_buffer.copy_interleaved_ref(decoded);
+                sample_buffer.samples()
+            }
+        };
+        let samples = &interleaved[skip * usize::from(decoded_channels)..];
         if !samples.is_empty() {
             visit(
                 sample_rate.expect("decoded sample rate"),
@@ -802,6 +914,7 @@ fn decode_audio_stream(
         DecodedInfo {
             sample_rate,
             channels,
+            channel_mask,
             frames,
         },
         format.into_inner(),

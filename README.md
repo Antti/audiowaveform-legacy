@@ -141,7 +141,15 @@ before writing. `transcode_audio_path_to_wav_path` also finishes decoding first,
 allowing input and output to name the same file.
 
 `AmplitudeScale::Auto` preserves relative amplitudes, maps the largest absolute
-peak to 32767, and leaves silence unchanged.
+peak to 32767, and leaves silence unchanged. `Waveform::into_scaled_amplitude`
+applies scaling while reusing an owned waveform's sample allocation.
+
+Decoded PCM retains known WAV speaker positions through `PcmAudio::channel_mask()`.
+Use `with_channel_mask(mask)` to specify the positions of constructed PCM samples;
+samples must already be interleaved in ascending speaker-bit order. WAV writing
+preserves these positions, including side-surround and nonstandard mono/stereo
+layouts, and uses bounded output staging. WAV input supports up to 18 positioned
+channels and rejects inconsistent nonzero masks before decoding.
 
 Use `ScaleSpec::Points(110)` in `GenerateOptions::scale` to generate exactly 110
 min/max pairs per channel from nonempty audio. Generation counts decoded PCM
@@ -153,7 +161,8 @@ using the same conversion as 8-bit serialization, without a JSON round trip.
 For exact point counts, `duration_seconds()` retains the decoded duration and
 `samples_per_point()` supplies the fractional scale. `samples_per_pixel()` is
 only a nominal integer scale. JSON preserves exact timing via `source_frames`;
-DAT export rejects scales it cannot represent. Exact-point waveforms must be
+DAT export rejects scales it cannot represent, including sample rates or scales
+above its signed 32-bit limit. Exact-point waveforms must be
 regenerated from audio rather than appended to or resampled.
 
 Waveform generation aggregates decoded blocks without retaining the full PCM

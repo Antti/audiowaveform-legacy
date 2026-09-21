@@ -30,6 +30,20 @@ pub enum AmplitudeScale {
     Auto,
 }
 
+impl AmplitudeScale {
+    pub(crate) fn validate(self) -> Result<(), Error> {
+        if let Self::Fixed(multiplier) = self
+            && (!multiplier.is_finite() || multiplier < 0.0)
+        {
+            return Err(Error::invalid_argument(
+                "amplitude scale",
+                "Invalid amplitude scale: must be a finite non-negative number",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// Immutable-ish waveform value containing metadata and interleaved min/max data.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Waveform {
@@ -285,6 +299,21 @@ impl Waveform {
         })
     }
 
+    pub(crate) fn push_extrema(&mut self, mins: &[i16], maxs: &[i16]) -> Result<(), Error> {
+        if self.source_frames.is_some()
+            || mins.len() != usize::from(self.channels)
+            || maxs.len() != mins.len()
+        {
+            return Err(Error::invalid_argument(
+                "points",
+                "Invalid extrema for waveform channels or timing",
+            ));
+        }
+        self.data
+            .extend(mins.iter().zip(maxs).flat_map(|(&min, &max)| [min, max]));
+        Ok(())
+    }
+
     /// Returns the interleaved internal min/max data.
     pub fn interleaved_samples(&self) -> &[i16] {
         &self.data
@@ -344,25 +373,25 @@ impl Waveform {
 
     /// Scales all waveform points by the provided amplitude strategy.
     pub fn scale_amplitude(&self, scale: AmplitudeScale) -> Result<Self, Error> {
+        scale.validate()?;
+        self.clone().into_scaled_amplitude(scale)
+    }
+
+    /// Scales an owned waveform, reusing its sample allocation.
+    pub fn into_scaled_amplitude(mut self, scale: AmplitudeScale) -> Result<Self, Error> {
+        scale.validate()?;
         let multiplier = match scale {
-            AmplitudeScale::Fixed(multiplier) => {
-                if !multiplier.is_finite() || multiplier < 0.0 {
-                    return Err(Error::invalid_argument(
-                        "amplitude scale",
-                        "Invalid amplitude scale: must be a positive number",
-                    ));
-                }
-                multiplier
-            }
+            AmplitudeScale::Fixed(multiplier) => multiplier,
             AmplitudeScale::Auto if self.is_empty() => 1.0,
             AmplitudeScale::Auto => self.auto_amplitude_scale(0, self.len())?,
         };
 
-        let mut scaled = self.clone();
-        for sample in &mut scaled.data {
-            *sample = clamp_scaled(i32::from(*sample), multiplier);
+        if multiplier != 1.0 {
+            for sample in &mut self.data {
+                *sample = clamp_scaled(i32::from(*sample), multiplier);
+            }
         }
-        Ok(scaled)
+        Ok(self)
     }
 
     /// Resamples the waveform to a coarser scale.
@@ -378,8 +407,10 @@ impl Waveform {
                 "Exact point counts require generation from audio, not waveform resampling",
             ));
         }
-        let total_frames = self.len() * self.samples_per_pixel as usize;
-        let output_samples_per_pixel = scale.resolve(self.sample_rate, total_frames)?;
+        let total_frames = (self.len() as u64)
+            .checked_mul(u64::from(self.samples_per_pixel))
+            .ok_or_else(|| Error::invalid_data("Waveform duration is too large"))?;
+        let output_samples_per_pixel = scale.resolve_frames(self.sample_rate, total_frames)?;
         if output_samples_per_pixel == self.samples_per_pixel {
             return Ok(self.clone());
         }
@@ -411,11 +442,11 @@ impl Waveform {
 
         while input_index < self.len() {
             while sample_at_pixel(output_index, output_samples_per_pixel)
-                / input_samples_per_pixel as usize
-                == input_index
+                / u128::from(input_samples_per_pixel)
+                == input_index as u128
             {
                 if output_index > 0 {
-                    flush_resampled_frame(&mut output, &min, &max)?;
+                    output.push_extrema(&min, &max)?;
                 }
                 last_input_index = input_index;
                 output_index += 1;
@@ -428,9 +459,9 @@ impl Waveform {
                 }
             }
 
-            let mut stop = sample_at_pixel(output_index, output_samples_per_pixel)
-                / input_samples_per_pixel as usize;
-            stop = stop.min(self.len());
+            let stop = (sample_at_pixel(output_index, output_samples_per_pixel)
+                / u128::from(input_samples_per_pixel))
+            .min(self.len() as u128) as usize;
             while input_index < stop {
                 for channel in 0..self.channels {
                     let point = self
@@ -449,7 +480,7 @@ impl Waveform {
         }
 
         if input_index != last_input_index {
-            flush_resampled_frame(&mut output, &min, &max)?;
+            output.push_extrema(&min, &max)?;
         }
 
         Ok(output)
@@ -503,8 +534,10 @@ impl Waveform {
             )));
         }
         let flags = reader.read_u32::<LittleEndian>()?;
-        let sample_rate = reader.read_u32::<LittleEndian>()?;
-        let samples_per_pixel = reader.read_u32::<LittleEndian>()?;
+        let sample_rate = u32::try_from(reader.read_i32::<LittleEndian>()?)
+            .map_err(|_| Error::invalid_data("Invalid negative DAT sample rate"))?;
+        let samples_per_pixel = u32::try_from(reader.read_i32::<LittleEndian>()?)
+            .map_err(|_| Error::invalid_data("Invalid negative DAT samples per pixel"))?;
         let length = reader.read_u32::<LittleEndian>()? as usize;
         let channels = if version == 2 {
             let channels = reader.read_i32::<LittleEndian>()?;
@@ -607,6 +640,16 @@ impl Waveform {
     fn validate_output(&self, format: WaveformFormat, bits: u8) -> Result<(), Error> {
         Self::validate_storage_bits(bits)?;
         if format == WaveformFormat::Dat
+            && (self.sample_rate > i32::MAX as u32
+                || self.samples_per_pixel > i32::MAX as u32
+                || u32::try_from(self.len()).is_err())
+        {
+            return Err(Error::invalid_argument(
+                "format",
+                "Waveform metadata exceeds DAT integer limits",
+            ));
+        }
+        if format == WaveformFormat::Dat
             && self.source_frames.is_some_and(|frames| {
                 u128::from(frames) != self.len() as u128 * u128::from(self.samples_per_pixel)
             })
@@ -624,8 +667,8 @@ impl Waveform {
         writer.write_i32::<LittleEndian>(version)?;
         let flags = if bits == 8 { FLAG_8_BIT } else { 0 };
         writer.write_u32::<LittleEndian>(flags)?;
-        writer.write_u32::<LittleEndian>(self.sample_rate)?;
-        writer.write_u32::<LittleEndian>(self.samples_per_pixel)?;
+        writer.write_i32::<LittleEndian>(self.sample_rate as i32)?;
+        writer.write_i32::<LittleEndian>(self.samples_per_pixel as i32)?;
         writer.write_u32::<LittleEndian>(self.len() as u32)?;
         if version == 2 {
             writer.write_u32::<LittleEndian>(u32::from(self.channels))?;
@@ -707,20 +750,8 @@ fn read_optional_i16<R: Read>(reader: &mut R) -> Result<Option<i16>, Error> {
     }
 }
 
-fn sample_at_pixel(index: usize, samples_per_pixel: u32) -> usize {
-    index * samples_per_pixel as usize
-}
-
-fn flush_resampled_frame(waveform: &mut Waveform, min: &[i16], max: &[i16]) -> Result<(), Error> {
-    let points = min
-        .iter()
-        .zip(max.iter())
-        .map(|(min, max)| WaveformPoint {
-            min: *min,
-            max: *max,
-        })
-        .collect::<Vec<_>>();
-    waveform.push_frame(&points)
+fn sample_at_pixel(index: usize, samples_per_pixel: u32) -> u128 {
+    index as u128 * u128::from(samples_per_pixel)
 }
 
 #[cfg(test)]
@@ -795,7 +826,7 @@ mod tests {
             .expect_err("negative scale");
         assert_eq!(
             error.to_string(),
-            "Invalid amplitude scale: must be a positive number"
+            "Invalid amplitude scale: must be a finite non-negative number"
         );
 
         for value in [f64::NAN, f64::INFINITY] {
@@ -804,7 +835,7 @@ mod tests {
                 .expect_err("non-finite amplitude scale");
             assert_eq!(
                 error.to_string(),
-                "Invalid amplitude scale: must be a positive number"
+                "Invalid amplitude scale: must be a finite non-negative number"
             );
         }
     }

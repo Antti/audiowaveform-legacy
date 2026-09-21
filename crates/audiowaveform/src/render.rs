@@ -107,8 +107,7 @@ pub fn render_waveform(waveform: &Waveform, options: &RenderOptions) -> Result<R
             "Image dimensions exceed the coordinate limit",
         ));
     }
-    let start_pixel =
-        options.start_time * f64::from(waveform.sample_rate()) / waveform.samples_per_point();
+    let start_pixel = seconds_to_pixel_position(waveform, options.start_time);
     if !start_pixel.is_finite()
         || start_pixel >= usize::MAX as f64
         || (start_pixel as usize)
@@ -648,7 +647,26 @@ fn round_up_to_nearest(value: f64, multiple: i64) -> Option<i64> {
 }
 
 fn seconds_to_pixels(waveform: &Waveform, seconds: f64) -> usize {
-    (seconds * waveform.sample_rate() as f64 / waveform.samples_per_point()) as usize
+    seconds_to_pixel_position(waveform, seconds) as usize
+}
+
+// Multiply before dividing to avoid rounding the fractional frames-per-point
+// scale first. Snap only floating-point roundoff at integer boundaries.
+fn seconds_to_pixel_position(waveform: &Waveform, seconds: f64) -> f64 {
+    if seconds == waveform.duration_seconds() {
+        return waveform.len() as f64;
+    }
+    let frames = seconds * f64::from(waveform.sample_rate());
+    let position = match waveform.source_frames() {
+        Some(total) if total > 0 => frames * waveform.len() as f64 / total as f64,
+        _ => frames / f64::from(waveform.samples_per_pixel()),
+    };
+    let nearest = position.round();
+    if (position - nearest).abs() <= 4.0 * f64::EPSILON * position.abs().max(1.0) {
+        nearest
+    } else {
+        position
+    }
 }
 
 fn scale_sample(value: i16, multiplier: f64) -> i16 {

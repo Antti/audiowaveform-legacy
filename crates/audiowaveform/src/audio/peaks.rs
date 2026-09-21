@@ -1,7 +1,5 @@
 use crate::{Error, GenerateOptions, ScaleSpec, Waveform};
 
-use super::flush_frame;
-
 pub(super) fn needs_frame_count(scale: ScaleSpec) -> bool {
     matches!(
         scale,
@@ -115,7 +113,7 @@ impl PeakAccumulator {
     }
 
     fn flush(&mut self) -> Result<(), Error> {
-        flush_frame(&mut self.waveform, &self.mins, &self.maxs)?;
+        self.waveform.push_extrema(&self.mins, &self.maxs)?;
         self.mins.fill(i16::MAX);
         self.maxs.fill(i16::MIN);
         self.pending = false;
@@ -134,7 +132,7 @@ impl PeakAccumulator {
             self.flush()?;
         }
         match options.amplitude_scale {
-            Some(scale) => self.waveform.scale_amplitude(scale),
+            Some(scale) => self.waveform.into_scaled_amplitude(scale),
             None => Ok(self.waveform),
         }
     }

@@ -11,10 +11,12 @@ use audiowaveform::{
 };
 
 struct TrackingAllocator;
+static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 
 fn allocated(size: usize) {
+    ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
     let live = LIVE.fetch_add(size, Ordering::Relaxed) + size;
     PEAK.fetch_max(live, Ordering::Relaxed);
 }
@@ -112,6 +114,33 @@ impl Seek for SilenceWav {
 
 #[test]
 fn decoded_pcm_memory_does_not_grow_with_recording_length() {
+    // Dense output should allocate only its growing output buffer, never a
+    // temporary frame per point or a second output buffer for identity scaling.
+    let pcm = audiowaveform::PcmAudio::new(48_000, 1, vec![1000; 1_000_000]).unwrap();
+    for amplitude_scale in [None, Some(audiowaveform::AmplitudeScale::Fixed(1.0))] {
+        let baseline = LIVE.load(Ordering::Relaxed);
+        let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+        PEAK.store(baseline, Ordering::Relaxed);
+        let waveform = audiowaveform::generate_waveform_from_pcm(
+            &pcm,
+            &GenerateOptions {
+                scale: ScaleSpec::SamplesPerPixel(2),
+                amplitude_scale,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let count = ALLOCATIONS.load(Ordering::Relaxed) - allocations;
+        let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
+        assert_eq!(waveform.len(), 500_000);
+        assert!(count < 100, "per-point allocations returned: {count}");
+        assert!(
+            peak < waveform.allocated_bytes() + 100_000,
+            "output was cloned: {peak}"
+        );
+    }
+    drop(pcm);
+
     for raw in [false, true] {
         for exact in [true, false] {
             let mut peaks = Vec::new();
