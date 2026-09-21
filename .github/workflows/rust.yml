@@ -77,3 +77,18 @@ jobs:
         run: cargo test --workspace
       - name: Check examples
         run: cargo check --workspace --examples
+
+  resampling-32-bit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: i686-unknown-linux-gnu
+      - name: Install 32-bit linker support
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib
+      - name: Exercise large resampling coordinates on 32-bit
+        run: >-
+          cargo test -p audiowaveform --no-default-features
+          --target i686-unknown-linux-gnu --test audit_followup
+          resampling_wide_frame_coordinates_is_safe_on_32_bit_targets

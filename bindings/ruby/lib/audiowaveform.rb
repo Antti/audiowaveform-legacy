@@ -48,15 +48,14 @@ module AudioWaveform
 
       unless points.nil?
         value = positive_integer(points, :points)
-        raise ArgumentError, "points must be at most 4294967295" if value > 0xffff_ffff
 
         return ["points", value]
       end
 
-      if pixels_per_second
+      unless pixels_per_second.nil?
         ["pixels_per_second", positive_integer(pixels_per_second, :pixels_per_second)]
       else
-        value = samples_per_pixel || 256
+        value = samples_per_pixel.nil? ? 256 : samples_per_pixel
         ["samples_per_pixel", positive_integer(value, :samples_per_pixel, minimum: 2)]
       end
     end
@@ -76,8 +75,8 @@ module AudioWaveform
     end
 
     def positive_integer(value, name, minimum: 1)
-      unless value.is_a?(Integer) && value >= minimum
-        raise ArgumentError, "#{name} must be an integer greater than or equal to #{minimum}"
+      unless value.is_a?(Integer) && value.between?(minimum, 0xffff_ffff)
+        raise ArgumentError, "#{name} must be an integer between #{minimum} and 4294967295"
       end
 
       value

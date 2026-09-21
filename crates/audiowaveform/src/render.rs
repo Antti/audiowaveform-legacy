@@ -34,6 +34,9 @@ pub enum RenderStyle {
 }
 
 /// Options controlling waveform rendering.
+///
+/// Image dimensions and the sum of bar width and gap must fit in `i32`.
+/// Start offsets must fit the platform's waveform index range.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderOptions {
     /// Output image width in pixels.
@@ -98,6 +101,41 @@ pub fn render_waveform(waveform: &Waveform, options: &RenderOptions) -> Result<R
             "At least one waveform color is required",
         ));
     }
+    if options.width > i32::MAX as u32 || options.height > i32::MAX as u32 {
+        return Err(Error::invalid_argument(
+            "image size",
+            "Image dimensions exceed the coordinate limit",
+        ));
+    }
+    let start_pixel = seconds_to_pixel_position(waveform, options.start_time);
+    if !start_pixel.is_finite()
+        || start_pixel >= usize::MAX as f64
+        || (start_pixel as usize)
+            .checked_add(options.width as usize)
+            .is_none()
+    {
+        return Err(Error::invalid_argument(
+            "start time",
+            "Start time exceeds the waveform coordinate limit",
+        ));
+    }
+    if let RenderStyle::Bars { width, gap, .. } = options.style {
+        if width == 0 {
+            return Err(Error::invalid_argument(
+                "bar width",
+                "Invalid bar width: minimum 1",
+            ));
+        }
+        if width
+            .checked_add(gap)
+            .is_none_or(|total| total > i32::MAX as u32)
+        {
+            return Err(Error::invalid_argument(
+                "bar width",
+                "Bar width and gap exceed the coordinate limit",
+            ));
+        }
+    }
 
     let mut image = RgbaImage::from_pixel(
         options.width,
@@ -105,24 +143,15 @@ pub fn render_waveform(waveform: &Waveform, options: &RenderOptions) -> Result<R
         rgba(options.colors.background),
     );
 
-    if options.axis_labels {
-        draw_border(&mut image, rgba(options.colors.border));
-    }
-
     match options.style {
         RenderStyle::Normal => draw_waveform_lines(&mut image, waveform, options)?,
         RenderStyle::Bars { width, gap, style } => {
-            if width == 0 {
-                return Err(Error::invalid_argument(
-                    "bar width",
-                    "Invalid bar width: minimum 1",
-                ));
-            }
             draw_waveform_bars(&mut image, waveform, options, width, gap, style)?
         }
     }
 
     if options.axis_labels {
+        draw_border(&mut image, rgba(options.colors.border));
         draw_time_axis_labels(&mut image, waveform, options);
     }
 
@@ -148,6 +177,14 @@ pub fn write_waveform_png<W: Write>(
     writer: W,
 ) -> Result<(), Error> {
     let image = render_waveform(waveform, options)?;
+    write_png_image(&image, options, writer)
+}
+
+fn write_png_image<W: Write>(
+    image: &RgbaImage,
+    options: &RenderOptions,
+    writer: W,
+) -> Result<(), Error> {
     let mut encoder = Encoder::new(writer, image.width(), image.height());
     encoder.set_color(ColorType::Rgba);
     encoder.set_depth(BitDepth::Eight);
@@ -160,6 +197,7 @@ pub fn write_waveform_png<W: Write>(
     });
     let mut png = encoder.write_header()?;
     png.write_image_data(image.as_raw())?;
+    png.finish()?;
     Ok(())
 }
 
@@ -169,8 +207,9 @@ pub fn render_waveform_to_path(
     options: &RenderOptions,
     path: impl AsRef<Path>,
 ) -> Result<(), Error> {
+    let image = render_waveform(waveform, options)?;
     let file = File::create(path)?;
-    write_waveform_png(waveform, options, BufWriter::new(file))
+    write_png_image(&image, options, BufWriter::new(file))
 }
 
 fn draw_waveform_lines(
@@ -210,12 +249,14 @@ fn draw_waveform_lines(
                 .expect("point within range");
             let low = i32::from(scale_sample(point.min, amplitude)) + 32768;
             let high = i32::from(scale_sample(point.max, amplitude)) + 32768;
-            let top = waveform_top_y + height - 1 - high * height / 65_536;
-            let bottom = waveform_top_y + height - 1 - low * height / 65_536;
+            let top = waveform_top_y + height - 1 - amplitude_offset(high, height);
+            let bottom = waveform_top_y + height - 1 - amplitude_offset(low, height);
             draw_vertical_line(image, x as i32, top, bottom, rgba(color));
         }
-        available_height -= row_height + 1;
-        waveform_top_y += row_height + 1;
+        if channel + 1 < channels {
+            available_height -= row_height + 1;
+            waveform_top_y += row_height + 1;
+        }
     }
     Ok(())
 }
@@ -244,7 +285,7 @@ fn draw_waveform_bars(
     let mut waveform_top_y = top_y;
     let bar_total = (bar_width + bar_gap) as usize;
     let bar_start_index = (start_index / bar_total) * bar_total;
-    let bar_start_offset = bar_start_index as isize - start_index as isize;
+    let bar_start_offset = -((start_index % bar_total) as i64);
 
     for channel in 0..channels {
         let waveform_bottom_y = if channel == channels - 1 {
@@ -257,12 +298,13 @@ fn draw_waveform_bars(
 
         let mut index = bar_start_index;
         let mut x = bar_start_offset;
-        while x < options.width as isize {
+        while x < i64::from(options.width) && index < waveform.len() {
             let bar_height = get_bar_height(waveform, channel as u16, index, bar_total);
             let low = i32::from(scale_sample(-(bar_height as i16), amplitude)) + 32768;
             let high = i32::from(scale_sample(bar_height as i16, amplitude)) + 32768;
-            let top = waveform_top_y + height - 1 - high * height / 65_536;
-            let bottom = waveform_top_y + height - 1 - low * height / 65_536;
+            let top = waveform_top_y + height - 1 - amplitude_offset(high, height);
+            let bottom = waveform_top_y + height - 1 - amplitude_offset(low, height);
+            let right = (x + i64::from(bar_width) - 1).min(i64::from(i32::MAX)) as i32;
             if top != bottom {
                 if bar_style == BarStyle::Rounded && bar_width > 2 && height >= 3 {
                     let radius = if bar_width > 4 {
@@ -270,32 +312,19 @@ fn draw_waveform_bars(
                     } else {
                         (bar_width / 2) as i32
                     };
-                    draw_rounded_rect(
-                        image,
-                        x as i32,
-                        top,
-                        x as i32 + bar_width as i32 - 1,
-                        bottom,
-                        radius,
-                        color,
-                    );
+                    draw_rounded_rect(image, x as i32, top, right, bottom, radius, color);
                 } else {
-                    fill_rect(
-                        image,
-                        x as i32,
-                        top,
-                        x as i32 + bar_width as i32 - 1,
-                        bottom,
-                        color,
-                    );
+                    fill_rect(image, x as i32, top, right, bottom, color);
                 }
             }
-            index += bar_total;
-            x += bar_total as isize;
+            index = index.saturating_add(bar_total);
+            x += bar_total as i64;
         }
 
-        available_height -= row_height + 1;
-        waveform_top_y += row_height + 1;
+        if channel + 1 < channels {
+            available_height -= row_height + 1;
+            waveform_top_y += row_height + 1;
+        }
     }
     Ok(())
 }
@@ -306,7 +335,7 @@ fn get_bar_height(waveform: &Waveform, channel: u16, start: usize, width: usize)
     }
     let mut low = i32::MAX;
     let mut high = i32::MIN;
-    for index in start..(start + width).min(waveform.len()) {
+    for index in start..start.saturating_add(width).min(waveform.len()) {
         let point = waveform.point(channel, index).expect("point within range");
         low = low.min(i32::from(point.min));
         high = high.max(i32::from(point.max));
@@ -422,24 +451,30 @@ fn draw_border(image: &mut RgbaImage, color: Rgba<u8>) {
 }
 
 fn draw_vertical_line(image: &mut RgbaImage, x: i32, y1: i32, y2: i32, color: Rgba<u8>) {
-    let start = y1.min(y2);
-    let end = y1.max(y2);
+    if x < 0 || x >= image.width() as i32 {
+        return;
+    }
+    let start = y1.min(y2).max(0);
+    let end = y1.max(y2).min(image.height() as i32 - 1);
     for y in start..=end {
         put_pixel(image, x, y, color);
     }
 }
 
 fn draw_horizontal_line(image: &mut RgbaImage, x1: i32, x2: i32, y: i32, color: Rgba<u8>) {
-    let start = x1.min(x2);
-    let end = x1.max(x2);
+    if y < 0 || y >= image.height() as i32 {
+        return;
+    }
+    let start = x1.min(x2).max(0);
+    let end = x1.max(x2).min(image.width() as i32 - 1);
     for x in start..=end {
         put_pixel(image, x, y, color);
     }
 }
 
 fn fill_rect(image: &mut RgbaImage, left: i32, top: i32, right: i32, bottom: i32, color: Rgba<u8>) {
-    for y in top..=bottom {
-        for x in left..=right {
+    for y in top.max(0)..=bottom.min(image.height() as i32 - 1) {
+        for x in left.max(0)..=right.min(image.width() as i32 - 1) {
             put_pixel(image, x, y, color);
         }
     }
@@ -454,6 +489,13 @@ fn draw_rounded_rect(
     radius: i32,
     color: Rgba<u8>,
 ) {
+    if left > right || top > bottom {
+        return;
+    }
+    let radius = i64::from(radius)
+        .min((i64::from(right) - i64::from(left) + 1) / 2)
+        .min((i64::from(bottom) - i64::from(top) + 1) / 2)
+        .max(0) as i32;
     let left_arc_x = left + radius;
     let top_arc_y = top + radius;
     let right_arc_x = right - radius;
@@ -510,9 +552,16 @@ fn fill_quarter_circle(
     quadrant: Quadrant,
     color: Rgba<u8>,
 ) {
+    let radius = i64::from(radius);
     let radius_sq = radius * radius;
-    for dy in -radius..=radius {
-        for dx in -radius..=radius {
+    let left = (i64::from(center_x) - radius).max(0);
+    let right = (i64::from(center_x) + radius).min(i64::from(image.width()) - 1);
+    let top = (i64::from(center_y) - radius).max(0);
+    let bottom = (i64::from(center_y) + radius).min(i64::from(image.height()) - 1);
+    for y in top..=bottom {
+        let dy = y - i64::from(center_y);
+        for x in left..=right {
+            let dx = x - i64::from(center_x);
             if dx * dx + dy * dy > radius_sq {
                 continue;
             }
@@ -523,7 +572,7 @@ fn fill_quarter_circle(
                 Quadrant::BottomRight => dx >= 0 && dy >= 0,
             };
             if allowed {
-                put_pixel(image, center_x + dx, center_y + dy, color);
+                put_pixel(image, x as i32, y as i32, color);
             }
         }
     }
@@ -598,11 +647,34 @@ fn round_up_to_nearest(value: f64, multiple: i64) -> Option<i64> {
 }
 
 fn seconds_to_pixels(waveform: &Waveform, seconds: f64) -> usize {
-    (seconds * waveform.sample_rate() as f64 / waveform.samples_per_point()) as usize
+    seconds_to_pixel_position(waveform, seconds) as usize
+}
+
+// Multiply before dividing to avoid rounding the fractional frames-per-point
+// scale first. Snap only floating-point roundoff at integer boundaries.
+fn seconds_to_pixel_position(waveform: &Waveform, seconds: f64) -> f64 {
+    if seconds == waveform.duration_seconds() {
+        return waveform.len() as f64;
+    }
+    let frames = seconds * f64::from(waveform.sample_rate());
+    let position = match waveform.source_frames() {
+        Some(total) if total > 0 => frames * waveform.len() as f64 / total as f64,
+        _ => frames / f64::from(waveform.samples_per_pixel()),
+    };
+    let nearest = position.round();
+    if (position - nearest).abs() <= 4.0 * f64::EPSILON * position.abs().max(1.0) {
+        nearest
+    } else {
+        position
+    }
 }
 
 fn scale_sample(value: i16, multiplier: f64) -> i16 {
     (f64::from(value) * multiplier).clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
+}
+
+fn amplitude_offset(value: i32, height: i32) -> i32 {
+    (i64::from(value) * i64::from(height) / 65_536) as i32
 }
 
 fn put_pixel(image: &mut RgbaImage, x: i32, y: i32, color: Rgba<u8>) {

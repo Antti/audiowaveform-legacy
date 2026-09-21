@@ -1,5 +1,24 @@
 # Ruby Gem Version History
 
+## Unreleased
+
+### Fixed
+
+- Decode AAC with padded ID3 tags safely and reject unsupported WAV channel
+  layouts before the decoder can panic or misinterpret sample grouping.
+- Reject `false` and integers above 4294967295 consistently with `ArgumentError`
+  for all scale keywords.
+- Reject DAT output whose sample rate or scale exceeds its signed 32-bit fields.
+- Reduce peak-generation allocations and avoid PCM conversion during the counting
+  pass. Extend installed native-gem smoke checks to points, bits, and duration.
+- Load DAT samples without reserving memory from the advertised length header.
+- Preserve relative amplitudes when automatically normalizing asymmetric peaks.
+- Reject overflowing automatic-fit scales instead of silently wrapping them.
+- Correct the format documentation: Wave64 (`.w64`) is unsupported.
+- Keep waveform generation from retaining the entire decoded recording in RAM.
+  Fixed scales aggregate decoded blocks in one pass; `points:` counts frames
+  and aggregates in two passes, including files with missing duration metadata.
+
 ## 0.2.0 - 2026-09-20
 
 ### Added

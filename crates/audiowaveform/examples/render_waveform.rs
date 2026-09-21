@@ -1,7 +1,6 @@
 use std::env;
-use std::fs::File;
 
-use audiowaveform::{RenderOptions, Waveform, write_waveform_png};
+use audiowaveform::{RenderOptions, Waveform, render_waveform_to_path};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
@@ -11,8 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = args.next().unwrap_or_else(|| "output.png".to_string());
 
     let waveform = Waveform::load_from_path(&input, None)?;
-    let output_file = File::create(output)?;
-    write_waveform_png(&waveform, &RenderOptions::default(), output_file)?;
+    render_waveform_to_path(&waveform, &RenderOptions::default(), output)?;
 
     Ok(())
 }

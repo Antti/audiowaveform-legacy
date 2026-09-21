@@ -5,8 +5,8 @@ mod support;
 use std::io::Cursor;
 
 use audiowaveform::{
-    AudioFormat, Error, GenerateOptions, decode_audio_from_path, generate_waveform_from_path,
-    generate_waveform_from_reader,
+    AmplitudeScale, AudioFormat, Error, GenerateOptions, ScaleSpec, decode_audio_from_path,
+    generate_waveform_from_path, generate_waveform_from_pcm, generate_waveform_from_reader,
 };
 use support::fixture_path;
 #[cfg(feature = "format-m4a")]
@@ -175,6 +175,36 @@ fn format_features_control_decoding() {
             generate_waveform_from_path(fixture_path(fixture), &GenerateOptions::default())
                 .expect("generate");
         assert!(!waveform.is_empty(), "{fixture}");
+        // Compare streamed packets with the in-memory reference across all enabled
+        // formats, including MP3 delay trimming and unknown-duration fragmented MP4.
+        for scale in [
+            ScaleSpec::SamplesPerPixel(311),
+            ScaleSpec::PixelsPerSecond(100),
+            ScaleSpec::Points(110),
+            ScaleSpec::FitWidth {
+                width_pixels: 110,
+                time_range: None,
+            },
+            ScaleSpec::FitWidth {
+                width_pixels: 110,
+                time_range: Some((0.0, 0.25)),
+            },
+        ] {
+            for split_channels in [false, true] {
+                let options = GenerateOptions {
+                    scale,
+                    split_channels,
+                    amplitude_scale: Some(AmplitudeScale::Auto),
+                };
+                let expected = generate_waveform_from_pcm(&pcm, &options).unwrap();
+                let streamed = generate_waveform_from_path(fixture_path(fixture), &options)
+                    .unwrap_or_else(|error| panic!("{fixture}, {scale:?}: {error}"));
+                assert_eq!(
+                    streamed, expected,
+                    "{fixture}, {scale:?}, split={split_channels}"
+                );
+            }
+        }
     }
 }
 

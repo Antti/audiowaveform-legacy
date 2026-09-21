@@ -52,8 +52,8 @@ waveform.data              # => interleaved [min, max, ...] samples
 
 | Keyword | Default | Description |
 | --- | --- | --- |
-| `samples_per_pixel` | `256` | Number of source samples represented by each waveform point. Must be at least 2. |
-| `pixels_per_second` | none | Time-based scale. Cannot be combined with `samples_per_pixel`. |
+| `samples_per_pixel` | `256` | Number of source samples represented by each waveform point. Integer from 2 to 4294967295. |
+| `pixels_per_second` | none | Time-based scale. Integer from 1 to 4294967295; cannot be combined with another scale keyword. |
 | `points` | none | Exact number of min/max pairs per channel for nonempty audio. Positive integer; mutually exclusive with the other scale options. |
 | `split_channels` | `false` | Preserve separate audio channels instead of mixing them down. |
 | `amplitude_scale` | none | Non-negative numeric multiplier, or `:auto` to normalize automatically. |
@@ -111,6 +111,14 @@ requested count; clips with fewer frames than points repeat source samples.
 Empty clips return an empty waveform with zero duration. The duration reflects
 decoded audio, including any untrimmed AAC encoder delay or padding.
 
+Generation processes decoded blocks incrementally instead of retaining the
+entire PCM recording. `points:` uses two decoding passes over the same file:
+one to count actual frames, then one to accumulate peaks. This bounds PCM
+working memory independently of recording length, at the cost of decoding
+twice. Keep the input file unchanged during generation. Fixed-scale options
+decode once; their output grows with the number of waveform points. Decoder
+and container metadata can also consume memory.
+
 `data(bits: 8)` returns values in -128..127, identical to the `data` array in
 `to_json(bits: 8)`, without serializing or parsing JSON. Conversion divides by 256
 and truncates toward zero. `data` still defaults to 16-bit values; neither form
@@ -131,13 +139,18 @@ AudioWaveform.generate("quiet.wav", amplitude_scale: 1.5)
 AudioWaveform.generate("quiet.wav", amplitude_scale: :auto)
 ```
 
+Automatic scaling preserves relative amplitudes and maps the largest absolute
+peak to 32767; silence is unchanged.
+
 Both source and precompiled gems enable the Rust library's `all-formats` feature:
-AAC-LC/ADTS, AAC-LC and ALAC in M4A/MP4, MP1/MP2/MP3, WAV/W64 (PCM and ADPCM),
+AAC-LC/ADTS, AAC-LC and ALAC in M4A/MP4, MP1/MP2/MP3, WAV (PCM and ADPCM),
 FLAC, Ogg (Vorbis and FLAC), AIFF, CAF (PCM and ALAC), and supported audio tracks
 in Matroska/WebM. No FFmpeg installation is required for decoding.
 
-AAC-LC supports mono and stereo. HE-AAC and Opus remain unsupported, including
-Opus inside Ogg/WebM/MP4. Raw PCM input is not currently exposed by the gem.
+AAC-LC supports mono and stereo. Wave64 (`.w64`), HE-AAC, and Opus remain
+unsupported, including Opus inside Ogg/WebM/MP4. Raw PCM input is not currently
+exposed by the gem. WAV input supports up to 18 positioned channels and rejects
+inconsistent nonzero speaker masks.
 The filename extension identifies the container; an enabled container can still
 contain an unsupported codec. Such files raise `AudioWaveform::Error`.
 AAC/MP4 waveform duration can include encoder delay and padding; gapless

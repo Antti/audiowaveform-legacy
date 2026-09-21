@@ -26,6 +26,89 @@ use self::support::{assert_png_bytes_match_fixture, assert_png_file_matches_fixt
 
 const EXACT_POINT_JSON: &str = r#"{"version":2,"channels":1,"sample_rate":48000,"samples_per_pixel":3,"bits":16,"length":3,"data":[-100,5,-200,100,-300,200],"source_frames":11}"#;
 
+#[cfg(feature = "render")]
+#[test]
+fn invalid_render_coordinates_preserve_existing_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.png");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "--input-format", "json", "--start", "1e308", "-o"])
+        .arg(&output)
+        .write_stdin(EXACT_POINT_JSON)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("coordinate limit"));
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+}
+
+#[cfg(feature = "wav-output")]
+#[test]
+fn invalid_wav_header_metadata_preserves_existing_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.wav");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args([
+            "-q",
+            "--input-format",
+            "raw",
+            "--raw-format",
+            "s16le",
+            "--raw-samplerate",
+            "2147483647",
+            "--raw-channels",
+            "2",
+            "-o",
+        ])
+        .arg(&output)
+        .write_stdin([0_u8; 4])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("WAV byte rate limit"));
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+}
+
+#[cfg(all(feature = "format-wav", feature = "wav-output"))]
+#[test]
+fn failed_wav_decode_preserves_existing_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.wav");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "--input-format", "wav", "-o"])
+        .arg(&output)
+        .write_stdin("invalid audio")
+        .assert()
+        .failure();
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+}
+
+#[test]
+fn rejects_wave64_without_touching_the_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.dat");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "-i", "unsupported.w64", "-o"])
+        .arg(&output)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unsupported format: w64"));
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["--input-format", "w64", "--output-format", "dat"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value 'w64'"));
+}
+
 #[test]
 fn rejects_unrepresentable_exact_point_dat_without_truncating_the_destination() {
     let directory = tempfile::tempdir().unwrap();
@@ -113,6 +196,15 @@ fn prints_help_and_version() {
         .assert()
         .success()
         .stdout(predicate::str::contains("AudioWaveform v"));
+}
+
+#[test]
+fn accepts_spaced_default_compression_level() {
+    Command::cargo_bin("audiowaveform")
+        .expect("binary")
+        .args(["--compression", "-1", "--help"])
+        .assert()
+        .success();
 }
 
 #[test]
@@ -551,4 +643,147 @@ fn generates_waveforms_from_m4a_paths_and_mp4_stdin() {
             .success()
             .stdout(path_output);
     }
+}
+
+#[cfg(all(unix, feature = "format-m4a"))]
+#[test]
+fn reads_encoded_pipes_passed_as_filenames() {
+    let bytes = read_fixture("formats/stereo.m4a");
+    let options = ["-q", "--input-format", "m4a", "--output-format", "json"];
+    let expected = Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(options)
+        .write_stdin(bytes.clone())
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    // /dev/stdin is an opened pipe here, exercising the same path as a FIFO
+    // or shell process substitution without an external mkfifo dependency.
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(options)
+        .args(["-i", "/dev/stdin"])
+        .write_stdin(bytes)
+        .assert()
+        .success()
+        .stdout(expected);
+}
+
+#[test]
+fn waveform_conversion_and_resampling_apply_amplitude_for_every_output_format() {
+    let input = r#"{"version":2,"channels":1,"sample_rate":48000,"samples_per_pixel":2,"bits":16,"length":2,"data":[-100,100,-200,200]}"#;
+    for format in ["dat", "json", "txt"] {
+        for resample in [false, true] {
+            for amplitude in ["2", "auto"] {
+                let mut command = Command::cargo_bin("audiowaveform").unwrap();
+                command.args([
+                    "-q",
+                    "--input-format",
+                    "json",
+                    "--output-format",
+                    format,
+                    "--amplitude-scale",
+                    amplitude,
+                ]);
+                if resample {
+                    command.args(["--zoom", "4"]);
+                }
+                let output = command
+                    .write_stdin(input)
+                    .assert()
+                    .success()
+                    .get_output()
+                    .stdout
+                    .clone();
+                let expected = match (resample, amplitude) {
+                    (false, "2") => vec![-200, 200, -400, 400],
+                    (false, _) => vec![-16383, 16383, -32767, 32767],
+                    (true, "2") => vec![-400, 400],
+                    (true, _) => vec![-32767, 32767],
+                };
+                if format == "txt" {
+                    let values: Vec<i16> = std::str::from_utf8(&output)
+                        .unwrap()
+                        .split([',', '\n'])
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.parse().unwrap())
+                        .collect();
+                    assert_eq!(values, expected);
+                } else {
+                    let wave = audiowaveform::Waveform::load_from_reader(
+                        output.as_slice(),
+                        format.parse().unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(wave.interleaved_samples(), &expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn raw_audio_can_be_written_as_text_peaks() {
+    let input: Vec<_> = [-100_i16, 100, -200, 200]
+        .into_iter()
+        .flat_map(i16::to_le_bytes)
+        .collect();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args([
+            "-q",
+            "--input-format",
+            "raw",
+            "--raw-format",
+            "s16le",
+            "--raw-samplerate",
+            "48000",
+            "--raw-channels",
+            "1",
+            "--zoom",
+            "2",
+            "--output-format",
+            "txt",
+        ])
+        .write_stdin(input)
+        .assert()
+        .success()
+        .stdout("-100,100\n-200,200\n");
+}
+
+#[cfg(feature = "format-wav")]
+#[test]
+fn encoded_audio_can_be_written_as_text_peaks() {
+    let mut input = std::io::Cursor::new(Vec::new());
+    let mut writer = hound::WavWriter::new(
+        &mut input,
+        hound::WavSpec {
+            channels: 1,
+            sample_rate: 48000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        },
+    )
+    .unwrap();
+    for sample in [-100_i16, 100, -200, 200] {
+        writer.write_sample(sample).unwrap();
+    }
+    writer.finalize().unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args([
+            "-q",
+            "--input-format",
+            "wav",
+            "--zoom",
+            "2",
+            "--output-format",
+            "txt",
+        ])
+        .write_stdin(input.into_inner())
+        .assert()
+        .success()
+        .stdout("-100,100\n-200,200\n");
 }

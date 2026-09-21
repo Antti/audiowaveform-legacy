@@ -36,6 +36,13 @@ Dir.mktmpdir("audiowaveform-install") do |directory|
     waveform = AudioWaveform.generate(File.join(repository, "fixtures/test_file_stereo.wav"), split_channels: true)
     abort "Wrong metadata" unless waveform.sample_rate == 16_000 && waveform.channels == 2
     abort "Invalid serialization" unless JSON.parse(waveform.to_json).fetch("data") == waveform.data
+    exact = AudioWaveform.generate(File.join(repository, "fixtures/formats/stereo.wav"), points: 110)
+    abort "Wrong point count or duration" unless exact.length == 110 && exact.duration == 0.25
+    peaks = exact.data(bits: 8)
+    abort "Invalid direct 8-bit peaks" unless peaks.length == 220 && peaks.all? { |value| value.between?(-128, 127) }
+    abort "8-bit peaks differ from serialization" unless peaks == JSON.parse(exact.to_json(bits: 8)).fetch("data")
+    fragmented = AudioWaveform.generate(File.join(repository, "fixtures/formats/fragmented.mp4"), points: 110)
+    abort "Durationless container failed" unless fragmented.length == 110 && fragmented.duration.positive?
     Dir.mktmpdir do |directory|
       path = File.join(directory, "waveform.dat")
       waveform.save(path)

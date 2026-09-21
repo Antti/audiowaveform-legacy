@@ -13,7 +13,7 @@ audiowaveform \- generates and renders waveforms from audio files
 .B audiowaveform
 generates waveform data from AAC-LC, ALAC, MPEG audio, WAV, FLAC, Ogg,
 AIFF, CAF, MP4/M4A, Matroska/WebM, and raw PCM audio sources.
-Opus and HE-AAC decoding are not supported. Custom builds can omit input formats,
+Wave64 (.w64), Opus, and HE-AAC decoding are not supported. Custom builds can omit input formats,
 PNG rendering, or WAV writing through Cargo features. Waveform data can be used to produce a visual rendering of the audio,
 similar in appearance to audio editing applications.
 
@@ -65,12 +65,17 @@ Disable status messages.
 .B --input-filename\fR, \fB-i\fR <filename>
 Input filename, which should be an audio file or a binary or JSON waveform data
 file. By default, \fBaudiowaveform\fR uses the extension to identify the container
-(.aac, .adts, .mp1, .mp2, .mp3, .wav, .w64, .flac, .ogg, .oga, .aiff, .aif,
+(.aac, .adts, .mp1, .mp2, .mp3, .wav, .flac, .ogg, .oga, .aiff, .aif,
 \&.aifc, .caf, .mp4, .m4a, .m4b, .m4r, .m4v, .mov, .mkv, .mka, .webm,
 \&.raw, .dat, or .json). This can be
 overridden by the \fB--input-format\fR option. If the \fB--input-filename\fR
 option is \fB-\fR or is omitted, \fBaudiowaveform\fR reads from standard input,
 and the \fB--input-format\fR option must be used to specify the data format.
+
+When generating waveform data or images, encoded audio from standard input or
+named pipes is copied to a temporary file before decoding. Raw PCM streams
+directly at fixed scales; \fB--zoom auto\fR copies it to a temporary file to
+determine its length. Temporary storage must accommodate the complete input.
 
 .TP
 .B --output-filename\fR, \fB-o\fR <filename>
@@ -106,6 +111,10 @@ samples to use to generate each output waveform data point.
 Note: this option cannot be used if either the \fB--pixels-per-second\fR or
 \fB--end\fR option is specified. When creating a PNG image file, a value of
 \fBauto\fR scales the waveform automatically to fit the image width.
+For encoded audio, automatic fitting decodes twice: first to count actual
+frames, then to aggregate peaks. Keep the input file unchanged between passes.
+Fixed scales decode once. Generation aggregates decoded blocks incrementally;
+memory includes the output waveform plus decoder and container state.
 
 .TP
 .B --pixels-per-second\fR <zoom> (default: 100)
@@ -181,7 +190,8 @@ image border.
 .B --amplitude-scale\fR <scale> (default: 1)
 When creating a waveform image or waveform data file, specifies an amplitude
 scaling (or vertical zoom) to apply to the waveform. Must be either a number
-or \fBauto\fR, which scales the waveform to the maximum height.
+or \fBauto\fR, which scales the largest absolute peak to 32767 while preserving
+relative amplitudes. Silence is unchanged.
 
 .TP
 .B --waveform-style\fR <style> (default: normal)

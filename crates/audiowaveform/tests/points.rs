@@ -76,10 +76,13 @@ fn exact_points_support_mixing_splitting_and_amplitude_scaling() {
 
 #[test]
 fn empty_input_stays_empty_and_zero_points_are_rejected() {
-    let empty = generate(Vec::new(), 1, 110, false);
-    assert!(empty.is_empty());
-    assert_eq!(empty.duration_seconds(), 0.0);
-    assert!(empty.data(8).unwrap().is_empty());
+    for points in [110, u32::MAX] {
+        let empty = generate(Vec::new(), 1, points, false);
+        assert!(empty.is_empty());
+        assert_eq!(empty.duration_seconds(), 0.0);
+        assert!(empty.data(8).unwrap().is_empty());
+        assert_eq!(empty.allocated_bytes(), 0);
+    }
     for samples in [vec![], vec![0, 0]] {
         let error = generate_waveform_from_pcm(
             &PcmAudio::new(48_000, 1, samples).unwrap(),

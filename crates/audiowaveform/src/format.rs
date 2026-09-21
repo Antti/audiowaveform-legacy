@@ -71,7 +71,7 @@ impl AudioFormat {
             "mp1" => Some(Self::Mp1),
             "mp2" => Some(Self::Mp2),
             "mp3" => Some(Self::Mp3),
-            "wav" | "w64" => Some(Self::Wav),
+            "wav" => Some(Self::Wav),
             "flac" => Some(Self::Flac),
             "ogg" | "oga" => Some(Self::Ogg),
             "opus" => Some(Self::Opus),
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn infers_audio_formats_from_extensions_and_paths() {
         assert_eq!(AudioFormat::from_extension("mp3"), Some(AudioFormat::Mp3));
-        assert_eq!(AudioFormat::from_extension("w64"), Some(AudioFormat::Wav));
+        assert_eq!(AudioFormat::from_extension("w64"), None);
         assert_eq!(AudioFormat::from_extension("oga"), Some(AudioFormat::Ogg));
         assert_eq!(AudioFormat::from_path("clip.flac"), Some(AudioFormat::Flac));
         assert_eq!(AudioFormat::from_path("clip.opus"), Some(AudioFormat::Opus));
