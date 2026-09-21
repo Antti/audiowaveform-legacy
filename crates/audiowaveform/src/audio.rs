@@ -178,34 +178,23 @@ pub enum ScaleSpec {
 }
 
 impl ScaleSpec {
-    /// Resolves the scale to a concrete number of samples per waveform point.
-    /// For `Points`, returns a nominal integer scale, rounded down with a minimum of 2.
-    pub fn resolve(self, sample_rate: u32, frame_count: usize) -> Result<u32, Error> {
-        self.resolve_frames(sample_rate, frame_count as u64)
-    }
-
-    pub(crate) fn resolve_frames(self, sample_rate: u32, frame_count: u64) -> Result<u32, Error> {
-        let resolved = match self {
-            Self::Points(points) => {
-                if points == 0 {
-                    return Err(Error::invalid_argument(
-                        "points",
-                        "Invalid points: must be greater than zero",
-                    ));
-                }
-                u32::try_from((frame_count / u64::from(points)).max(2)).map_err(|_| {
-                    Error::invalid_argument("points", "Too many source frames per point")
-                })?
+    /// Checks scale arguments that do not depend on source metadata.
+    fn validate(self) -> Result<(), Error> {
+        match self {
+            Self::Points(0) => {
+                return Err(Error::invalid_argument(
+                    "points",
+                    "Invalid points: must be greater than zero",
+                ));
             }
-            Self::SamplesPerPixel(value) => value,
-            Self::PixelsPerSecond(value) => {
-                if value == 0 {
-                    return Err(Error::invalid_argument(
-                        "pixels per second",
-                        "Invalid pixels per second: must be greater than zero",
-                    ));
-                }
-                sample_rate / value
+            Self::SamplesPerPixel(0 | 1) => {
+                return Err(Error::invalid_argument("zoom", "Invalid zoom: minimum 2"));
+            }
+            Self::PixelsPerSecond(0) => {
+                return Err(Error::invalid_argument(
+                    "pixels per second",
+                    "Invalid pixels per second: must be greater than zero",
+                ));
             }
             Self::FitWidth {
                 width_pixels,
@@ -217,7 +206,7 @@ impl ScaleSpec {
                         "Invalid image width: minimum 1",
                     ));
                 }
-                let frames = if let Some((start, end)) = time_range {
+                if let Some((start, end)) = time_range {
                     if !start.is_finite() || start < 0.0 {
                         return Err(Error::invalid_argument(
                             "start time",
@@ -230,6 +219,33 @@ impl ScaleSpec {
                             format!("Invalid end time, must be greater than {start}"),
                         ));
                     }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Resolves the scale to a concrete number of samples per waveform point.
+    /// For `Points`, returns a nominal integer scale, rounded down with a minimum of 2.
+    pub fn resolve(self, sample_rate: u32, frame_count: usize) -> Result<u32, Error> {
+        self.resolve_frames(sample_rate, frame_count as u64)
+    }
+
+    pub(crate) fn resolve_frames(self, sample_rate: u32, frame_count: u64) -> Result<u32, Error> {
+        self.validate()?;
+        let resolved = match self {
+            Self::Points(points) => u32::try_from((frame_count / u64::from(points)).max(2))
+                .map_err(|_| {
+                    Error::invalid_argument("points", "Too many source frames per point")
+                })?,
+            Self::SamplesPerPixel(value) => value,
+            Self::PixelsPerSecond(value) => sample_rate / value,
+            Self::FitWidth {
+                width_pixels,
+                time_range,
+            } => {
+                let frames = if let Some((start, end)) = time_range {
                     let frames = (end - start) * f64::from(sample_rate);
                     if !frames.is_finite() || frames >= u64::MAX as f64 {
                         return Err(Error::invalid_argument(
@@ -277,57 +293,32 @@ impl Default for GenerateOptions {
 }
 
 impl GenerateOptions {
-    // Validate before any decoding, counting, or temporary-file I/O. Sample-rate
-    // dependent resolution is checked once the source metadata is available.
+    // Validate before decoding, counting, or temporary-file I/O. Keep the
+    // generation API's end-time diagnostic and reject empty ranges before I/O;
+    // direct scale resolution rejects an empty range as a sub-minimum zoom.
     fn validate(&self) -> Result<(), Error> {
-        match self.scale {
-            ScaleSpec::Points(0) => {
-                return Err(Error::invalid_argument(
-                    "points",
-                    "Invalid points: must be greater than zero",
-                ));
-            }
-            ScaleSpec::SamplesPerPixel(0 | 1) => {
-                return Err(Error::invalid_argument("zoom", "Invalid zoom: minimum 2"));
-            }
-            ScaleSpec::PixelsPerSecond(0) => {
-                return Err(Error::invalid_argument(
-                    "pixels per second",
-                    "Invalid pixels per second: must be greater than zero",
-                ));
-            }
-            ScaleSpec::FitWidth {
-                width_pixels,
-                time_range,
-            } => {
-                if width_pixels == 0 {
-                    return Err(Error::invalid_argument(
-                        "image width",
-                        "Invalid image width: minimum 1",
-                    ));
-                }
-                if let Some((start, end)) = time_range {
-                    if !start.is_finite() || start < 0.0 {
-                        return Err(Error::invalid_argument(
-                            "start time",
-                            "Invalid start time: minimum 0",
-                        ));
-                    }
-                    if !end.is_finite() || end <= start {
-                        return Err(Error::invalid_argument(
-                            "end time",
-                            "Invalid end time: must be finite and greater than the start time",
-                        ));
-                    }
-                }
-            }
-            _ => {}
+        self.scale.validate().map_err(|error| match error {
+            Error::InvalidArgument {
+                name: "end time", ..
+            } => invalid_generation_end_time(),
+            other => other,
+        })?;
+        if matches!(self.scale, ScaleSpec::FitWidth { time_range: Some((start, end)), .. } if start == end)
+        {
+            return Err(invalid_generation_end_time());
         }
         if let Some(scale) = self.amplitude_scale {
             scale.validate()?;
         }
         Ok(())
     }
+}
+
+fn invalid_generation_end_time() -> Error {
+    Error::invalid_argument(
+        "end time",
+        "Invalid end time: must be finite and greater than the start time",
+    )
 }
 
 /// Supported raw audio sample encodings.
