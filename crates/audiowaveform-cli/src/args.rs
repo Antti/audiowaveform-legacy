@@ -1,8 +1,8 @@
 use std::path::Path;
 
+use audiowaveform::{AudioFormat, RawSampleFormat, WaveformFormat};
 #[cfg(feature = "render")]
-use audiowaveform::BarStyle;
-use audiowaveform::{AudioFormat, ColorScheme, RawSampleFormat, WaveformFormat};
+use audiowaveform::{BarStyle, ColorScheme};
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::{Parser, ValueEnum};
 
@@ -70,7 +70,7 @@ pub(super) struct Cli {
     #[arg(short = 'b', long = "bits")]
     pub(super) bits: Option<i32>,
 
-    /// Start rendering at a time offset in seconds.
+    /// Set the start time for rendering or a fitted time range, in seconds.
     #[arg(short = 's', long = "start", default_value_t = 0.0)]
     pub(super) start: f64,
 
@@ -78,55 +78,67 @@ pub(super) struct Cli {
     #[arg(short = 'e', long = "end")]
     pub(super) end: Option<f64>,
 
-    /// Set image width in pixels.
+    /// Set the width for rendering or fitting waveform data.
     #[arg(short = 'w', long = "width", default_value_t = 800)]
     pub(super) width: i32,
 
     /// Set image height in pixels.
+    #[cfg(feature = "render")]
     #[arg(short = 'h', long = "height", default_value_t = 250)]
     pub(super) height: i32,
 
     /// Choose a built-in color scheme.
+    #[cfg(feature = "render")]
     #[arg(short = 'c', long = "colors", value_enum, default_value = "audacity")]
     pub(super) color_scheme: CliColorScheme,
 
     /// Override the border color using `rrggbb[aa]`.
+    #[cfg(feature = "render")]
     #[arg(long = "border-color")]
     pub(super) border_color: Option<String>,
 
     /// Override the background color using `rrggbb[aa]`.
+    #[cfg(feature = "render")]
     #[arg(long = "background-color")]
     pub(super) background_color: Option<String>,
 
     /// Set one or more waveform colors using `rrggbb[aa]`.
+    #[cfg(feature = "render")]
     #[arg(long = "waveform-color")]
     pub(super) waveform_color: Option<String>,
 
     /// Render as lines or grouped bars.
+    #[cfg(feature = "render")]
     #[arg(long = "waveform-style", value_enum, default_value = "normal")]
     pub(super) waveform_style: CliWaveformStyle,
 
     /// Set bar width in pixels.
+    #[cfg(feature = "render")]
     #[arg(long = "bar-width", default_value_t = 8)]
     pub(super) bar_width: i32,
 
     /// Set gap between bars in pixels.
+    #[cfg(feature = "render")]
     #[arg(long = "bar-gap", default_value_t = 4)]
     pub(super) bar_gap: i32,
 
     /// Set the bar end-cap style.
+    #[cfg(feature = "render")]
     #[arg(long = "bar-style", value_enum, default_value = "square")]
     pub(super) bar_style: CliBarStyle,
 
     /// Override the axis label color using `rrggbb[aa]`.
+    #[cfg(feature = "render")]
     #[arg(long = "axis-label-color")]
     pub(super) axis_label_color: Option<String>,
 
     /// Hide time axis labels.
+    #[cfg(feature = "render")]
     #[arg(long = "no-axis-labels")]
     pub(super) no_axis_labels: bool,
 
     /// Show time axis labels.
+    #[cfg(feature = "render")]
     #[arg(long = "with-axis-labels")]
     pub(super) with_axis_labels: bool,
 
@@ -135,6 +147,7 @@ pub(super) struct Cli {
     pub(super) amplitude_scale: String,
 
     /// Set PNG compression level from `-1` to `9`.
+    #[cfg(feature = "render")]
     #[arg(long = "compression", default_value_t = -1, allow_negative_numbers = true)]
     pub(super) compression: i32,
 
@@ -265,12 +278,14 @@ impl CliFormat {
     }
 }
 
+#[cfg(feature = "render")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(super) enum CliColorScheme {
     Audacity,
     Audition,
 }
 
+#[cfg(feature = "render")]
 impl CliColorScheme {
     pub(super) fn into_library(self) -> ColorScheme {
         match self {
@@ -280,12 +295,14 @@ impl CliColorScheme {
     }
 }
 
+#[cfg(feature = "render")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(super) enum CliWaveformStyle {
     Normal,
     Bars,
 }
 
+#[cfg(feature = "render")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 pub(super) enum CliBarStyle {
     Square,

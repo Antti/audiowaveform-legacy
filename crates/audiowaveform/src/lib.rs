@@ -11,8 +11,9 @@
 //! No features are enabled by default. PCM/raw waveform generation, serialization,
 //! and resampling are always available. Enable `format-mp3`, `format-m4a`, or another
 //! `format-*` bundle for decoding, or `all-formats` for every supported input format.
-//! Each format enables the shared `decode` plumbing. `render` enables PNG rendering;
-//! `wav-output` enables PCM16 WAV writing independently of input decoding.
+//! Each format enables the shared `decode` plumbing. `render` enables PNG rendering
+//! and its color/palette types. `wav-output` enables PCM16 WAV writing independently
+//! of input decoding.
 //! Wave64 (`.w64`), Opus, and HE-AAC are not supported, even with `all-formats` enabled.
 //!
 //! # Examples
@@ -58,6 +59,7 @@
 //! ```
 
 mod audio;
+#[cfg(feature = "render")]
 mod color;
 mod error;
 mod format;
@@ -76,6 +78,7 @@ pub use audio::{
     decode_audio_from_path, decode_audio_from_reader, generate_waveform_from_path,
     generate_waveform_from_reader,
 };
+#[cfg(feature = "render")]
 pub use color::{Color, ColorScheme, WaveformColors};
 pub use error::Error;
 pub use format::{AudioFormat, WaveformFormat};

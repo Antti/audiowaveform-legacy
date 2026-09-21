@@ -96,7 +96,7 @@ audiowaveform = { version = "0.1.0", features = ["format-mp3", "format-m4a"] }
 | `format-ogg` | Vorbis and FLAC in Ogg (`.ogg`, `.oga`) |
 | `format-wav` | PCM and ADPCM in WAV |
 | `all-formats` | All input format bundles above |
-| `render` | PNG rendering |
+| `render` | PNG rendering and color/palette types |
 | `wav-output` | PCM16 WAV writing |
 
 `format-mp4` aliases `format-m4a`; `format-webm` aliases `format-mkv`.
@@ -224,7 +224,10 @@ cargo build -p audiowaveform-cli --no-default-features --features format-mp3,for
 
 Add `render` or `wav-output` for those outputs. With no features, the CLI can
 still process raw PCM and convert/resample waveform data. Requests for omitted
-formats or outputs report the required Cargo feature.
+formats or outputs report the required Cargo feature. Image height, color, bar,
+axis-label, and PNG compression options are available only with `render`.
+Width, zoom, and time-range options remain available for waveform generation
+and resampling.
 
 Generate `.dat` waveform data:
 

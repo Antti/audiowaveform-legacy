@@ -56,6 +56,7 @@ contain breaking changes.
   before creating or truncating the output file.
 - Make the Rust library minimal by default, with opt-in `format-*`, `render`,
   and `wav-output` features and an `all-formats` input bundle.
+- Gate color/palette types and rendering-only CLI options behind `render`.
 - Enable every supported input format, PNG rendering, and WAV output by default
   in the CLI; allow custom builds with `--no-default-features`.
 - Add AAC-LC/ADTS, MP4/M4A (including ALAC), AIFF, CAF, MPEG layers I/II,
