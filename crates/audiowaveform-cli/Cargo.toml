@@ -3,9 +3,11 @@ name = "audiowaveform-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+readme.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "Command-line interface for the Rust audiowaveform library"
+include = ["src/**", "Cargo.toml", "COPYING"]
 
 [[bin]]
 name = "audiowaveform"
@@ -32,7 +34,7 @@ render = ["audiowaveform/render"]
 wav-output = ["audiowaveform/wav-output"]
 
 [dependencies]
-audiowaveform = { path = "../audiowaveform", default-features = false }
+audiowaveform = { path = "../audiowaveform", version = "0.1.0", default-features = false }
 clap.workspace = true
 tempfile.workspace = true
 

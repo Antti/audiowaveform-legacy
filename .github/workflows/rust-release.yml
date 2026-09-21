@@ -1,0 +1,67 @@
+name: Rust Crate Release
+
+on:
+  push:
+    tags:
+      - "rust-v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify release versions and tag
+        run: |
+          python3 - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          def manifest(path):
+              return tomllib.loads(pathlib.Path(path).read_text())
+
+          version = manifest("Cargo.toml")["workspace"]["package"]["version"]
+          for name in ("audiowaveform", "audiowaveform-cli"):
+              package = manifest(f"crates/{name}/Cargo.toml")
+              assert package["package"]["version"] == {"workspace": True}, name
+          cli = manifest("crates/audiowaveform-cli/Cargo.toml")
+          assert cli["dependencies"]["audiowaveform"]["version"] == version
+          if os.environ["GITHUB_REF_TYPE"] == "tag":
+              assert os.environ["GITHUB_REF_NAME"] == f"rust-v{version}", "tag/version mismatch"
+          PY
+
+  test:
+    needs: validate
+    uses: ./.github/workflows/rust.yml
+
+  publish:
+    # Manual runs validate and package without publishing, even on a tag.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/rust-v')
+    needs: test
+    runs-on: ubuntu-latest
+    environment: rust-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish library and CLI in dependency order
+        run: |
+          test -n "$CARGO_REGISTRY_TOKEN" || { echo "Configure the rust-release environment's CARGO_REGISTRY_TOKEN secret first." >&2; exit 1; }
+          cargo publish --workspace --all-features --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" target/package/*.crate --generate-notes --title "$GITHUB_REF_NAME" --verify-tag
+        env:
+          GH_TOKEN: ${{ github.token }}
