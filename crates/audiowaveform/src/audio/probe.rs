@@ -33,7 +33,7 @@ fn register_guards(_probe: &mut Probe) {
                 // length disables only the estimate; we count decoded frames.
                 let position = source.pos();
                 let mut source = MediaSourceStream::new(
-                    Box::new(super::ReadSeekMediaSource::new(source, None)),
+                    Box::new(super::decode::ReadSeekMediaSource::new(source, None)),
                     Default::default(),
                 );
                 source.seek(SeekFrom::Start(position))?;
