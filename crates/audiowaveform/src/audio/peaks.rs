@@ -35,11 +35,20 @@ impl PeakAccumulator {
         }
         let scale = options.scale.resolve(sample_rate, frames)?;
         let output_channels = if options.split_channels { channels } else { 1 };
-        let waveform = Waveform::new(sample_rate, scale, output_channels)?;
+        let mut waveform = Waveform::new(sample_rate, scale, output_channels)?;
         let exact = match options.scale {
             ScaleSpec::Points(points) => Some((frames, points)),
             _ => None,
         };
+        // A nonzero frame count comes from in-memory PCM or a completed counting
+        // pass. Reserve only the output; zero can mean empty or unknown input.
+        if frames != 0 {
+            let points = exact.map_or_else(
+                || frames.div_ceil(scale as usize),
+                |(_, points)| points as usize,
+            );
+            waveform.reserve_points(points)?;
+        }
         Ok(Self {
             waveform,
             channels: usize::from(channels),

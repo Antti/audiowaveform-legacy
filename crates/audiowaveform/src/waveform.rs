@@ -299,6 +299,18 @@ impl Waveform {
         })
     }
 
+    pub(crate) fn reserve_points(&mut self, additional: usize) -> Result<(), Error> {
+        let samples = additional
+            .checked_mul(usize::from(self.channels) * 2)
+            .ok_or_else(|| Error::invalid_argument("points", "Waveform output is too large"))?;
+        self.data.try_reserve_exact(samples).map_err(|error| {
+            Error::invalid_argument(
+                "points",
+                format!("Cannot allocate waveform output: {error}"),
+            )
+        })
+    }
+
     pub(crate) fn push_extrema(&mut self, mins: &[i16], maxs: &[i16]) -> Result<(), Error> {
         if self.source_frames.is_some()
             || mins.len() != usize::from(self.channels)
@@ -768,6 +780,16 @@ mod tests {
             .push_frame(&[WaveformPoint { min: -30, max: 40 }])
             .expect("second frame");
         waveform
+    }
+
+    #[test]
+    fn rejects_unrepresentable_output_reservations_without_panicking() {
+        let mut waveform = Waveform::new(48_000, 64, 1).unwrap();
+        for points in [usize::MAX, usize::MAX / 2] {
+            assert!(waveform.reserve_points(points).is_err());
+            assert!(waveform.is_empty());
+            assert_eq!(waveform.allocated_bytes(), 0);
+        }
     }
 
     #[test]

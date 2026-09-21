@@ -114,32 +114,43 @@ impl Seek for SilenceWav {
 
 #[test]
 fn decoded_pcm_memory_does_not_grow_with_recording_length() {
-    // Dense output should allocate only its growing output buffer, never a
-    // temporary frame per point or a second output buffer for identity scaling.
-    let pcm = audiowaveform::PcmAudio::new(48_000, 1, vec![1000; 1_000_000]).unwrap();
-    for amplitude_scale in [None, Some(audiowaveform::AmplitudeScale::Fixed(1.0))] {
-        let baseline = LIVE.load(Ordering::Relaxed);
-        let allocations = ALLOCATIONS.load(Ordering::Relaxed);
-        PEAK.store(baseline, Ordering::Relaxed);
-        let waveform = audiowaveform::generate_waveform_from_pcm(
-            &pcm,
-            &GenerateOptions {
-                scale: ScaleSpec::SamplesPerPixel(2),
-                amplitude_scale,
-                ..Default::default()
-            },
+    // Known-size output needs one allocation plus the two extrema buffers,
+    // independent of point count, channel mixing, or identity scaling.
+    for (channels, split_channels) in [(1, false), (2, false), (2, true)] {
+        let pcm = audiowaveform::PcmAudio::new(
+            48_000,
+            channels,
+            vec![1000; 1_000_000 * usize::from(channels)],
         )
         .unwrap();
-        let count = ALLOCATIONS.load(Ordering::Relaxed) - allocations;
-        let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
-        assert_eq!(waveform.len(), 500_000);
-        assert!(count < 100, "per-point allocations returned: {count}");
-        assert!(
-            peak < waveform.allocated_bytes() + 100_000,
-            "output was cloned: {peak}"
-        );
+        for (scale, points) in [
+            (ScaleSpec::Points(110), 110),
+            (ScaleSpec::SamplesPerPixel(3), 333_334),
+        ] {
+            for amplitude_scale in [None, Some(audiowaveform::AmplitudeScale::Fixed(1.0))] {
+                let baseline = LIVE.load(Ordering::Relaxed);
+                let allocations = ALLOCATIONS.load(Ordering::Relaxed);
+                PEAK.store(baseline, Ordering::Relaxed);
+                let waveform = audiowaveform::generate_waveform_from_pcm(
+                    &pcm,
+                    &GenerateOptions {
+                        scale,
+                        split_channels,
+                        amplitude_scale,
+                    },
+                )
+                .unwrap();
+                let count = ALLOCATIONS.load(Ordering::Relaxed) - allocations;
+                let peak = PEAK.load(Ordering::Relaxed).saturating_sub(baseline);
+                assert_eq!(waveform.len(), points);
+                assert!(count <= 3, "waveform output reallocated: {count}");
+                assert!(
+                    peak <= waveform.allocated_bytes() + 1024,
+                    "output was cloned: {peak}"
+                );
+            }
+        }
     }
-    drop(pcm);
 
     for raw in [false, true] {
         for exact in [true, false] {
