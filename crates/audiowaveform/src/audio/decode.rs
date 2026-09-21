@@ -2,19 +2,20 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use symphonia::core::audio::{AudioBufferRef, SampleBuffer, Signal};
-use symphonia::core::codecs::{CODEC_TYPE_ALAC, DecoderOptions};
+use symphonia::core::codecs::{CODEC_TYPE_ALAC, CodecParameters, Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::default::get_codecs;
 
-use super::pcm::clamp_float_to_i16;
 use super::peaks::{PeakAccumulator, needs_frame_count};
 use super::probe;
 use crate::{AudioFormat, Error, GenerateOptions, PcmAudio, Waveform};
+
+mod convert;
+use convert::SampleConverter;
 
 pub(super) struct ReadSeekMediaSource<R> {
     inner: R,
@@ -106,8 +107,7 @@ pub fn generate_waveform_from_reader<R: Read + Seek + Send + Sync + 'static>(
     };
     let mut source = media_source_stream(reader)?;
     let expected = if count_frames {
-        let (info, returned_source) =
-            decode_audio_stream(source, format_hint, true, |_, _, _| Ok(()))?;
+        let (info, returned_source) = DecoderSession::new(source, format_hint)?.count_frames()?;
         source = returned_source;
         source.seek(SeekFrom::Start(start))?;
         Some(info)
@@ -116,10 +116,7 @@ pub fn generate_waveform_from_reader<R: Read + Seek + Send + Sync + 'static>(
     };
 
     let mut peaks = None;
-    let (info, _) = decode_audio_stream(
-        source,
-        format_hint,
-        false,
+    let (info, _) = DecoderSession::new(source, format_hint)?.visit_samples(
         |sample_rate, channels, samples| {
             if peaks.is_none() {
                 peaks = Some(PeakAccumulator::new(
@@ -162,10 +159,7 @@ pub(crate) fn decode_audio_reader<R: Read + Seek + Send + Sync + 'static>(
     format_hint: Option<AudioFormat>,
 ) -> Result<PcmAudio, Error> {
     let mut samples = Vec::new();
-    let (info, _) = decode_audio_stream(
-        media_source_stream(reader)?,
-        format_hint,
-        false,
+    let (info, _) = DecoderSession::new(media_source_stream(reader)?, format_hint)?.visit_samples(
         |_, _, block| {
             samples.extend_from_slice(block);
             Ok(())
@@ -200,36 +194,177 @@ struct DecodedInfo {
     frames: usize,
 }
 
-/// Decode one packet at a time. Returning the underlying stream lets a counting
-/// pass restart probing from the beginning, even for formats without demuxer seeking.
-fn decode_audio_stream(
-    source: MediaSourceStream,
-    format_hint: Option<AudioFormat>,
-    count_only: bool,
-    mut visit: impl FnMut(u32, u16, &[i16]) -> Result<(), Error>,
-) -> Result<(DecodedInfo, MediaSourceStream), Error> {
-    let mut hint = Hint::new();
-    if let Some(format) = format_hint {
-        format.ensure_enabled()?;
-        hint.with_extension(format.as_str());
+/// A selected track and decoder, shared by counting and sample-visiting passes.
+struct DecoderSession {
+    format: Box<dyn FormatReader>,
+    decoder: Box<dyn Decoder>,
+    track_id: u32,
+    codec_params: CodecParameters,
+}
+
+enum DecodeMode<F> {
+    CountFrames,
+    VisitSamples(F),
+}
+
+impl DecoderSession {
+    fn new(source: MediaSourceStream, format_hint: Option<AudioFormat>) -> Result<Self, Error> {
+        let mut hint = Hint::new();
+        if let Some(format) = format_hint {
+            format.ensure_enabled()?;
+            hint.with_extension(format.as_str());
+        }
+        let probed = probe::get_probe().format(
+            &hint,
+            source,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )?;
+        let format = probed.format;
+        let track = format
+            .default_track()
+            .into_iter()
+            .chain(format.tracks())
+            .find(|track| get_codecs().get_codec(track.codec_params.codec).is_some())
+            .ok_or_else(|| Error::UnsupportedFormat {
+                format: "no supported audio track in this build".into(),
+            })?;
+        let track_id = track.id;
+        let mut codec_params = track.codec_params.clone();
+        normalize_codec_parameters(&mut codec_params);
+        let decoder = get_codecs().make(&codec_params, &DecoderOptions::default())?;
+        Ok(Self {
+            format,
+            decoder,
+            track_id,
+            codec_params,
+        })
     }
-    let probed = probe::get_probe().format(
-        &hint,
-        source,
-        &FormatOptions::default(),
-        &MetadataOptions::default(),
-    )?;
-    let mut format = probed.format;
-    let track = format
-        .default_track()
-        .into_iter()
-        .chain(format.tracks())
-        .find(|track| get_codecs().get_codec(track.codec_params.codec).is_some())
-        .ok_or_else(|| Error::UnsupportedFormat {
-            format: "no supported audio track in this build".into(),
+
+    fn count_frames(self) -> Result<(DecodedInfo, MediaSourceStream), Error> {
+        self.run::<fn(u32, u16, &[i16]) -> Result<(), Error>>(DecodeMode::CountFrames)
+    }
+
+    fn visit_samples(
+        self,
+        visit: impl FnMut(u32, u16, &[i16]) -> Result<(), Error>,
+    ) -> Result<(DecodedInfo, MediaSourceStream), Error> {
+        self.run(DecodeMode::VisitSamples(visit))
+    }
+
+    // Keep one packet loop and metadata/delay policy for both operations. Return
+    // the underlying stream so counting can replay formats without demuxer seeking.
+    fn run<F>(self, mut mode: DecodeMode<F>) -> Result<(DecodedInfo, MediaSourceStream), Error>
+    where
+        F: FnMut(u32, u16, &[i16]) -> Result<(), Error>,
+    {
+        let Self {
+            mut format,
+            mut decoder,
+            track_id,
+            codec_params,
+        } = self;
+        let mut sample_rate = codec_params.sample_rate;
+        let mut channels = codec_params
+            .channels
+            .map(|channels| channels.count() as u16);
+        let mut channel_mask = codec_params.channels.map(|channels| channels.bits());
+        let mut delay_remaining = codec_params.delay.unwrap_or(0) as usize;
+
+        let mut conversion = SampleConverter::default();
+        let mut saw_frames = false;
+        let mut frames = 0_usize;
+        loop {
+            let packet = match format.next_packet() {
+                Ok(packet) => packet,
+                Err(SymphoniaError::IoError(error))
+                    if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            if packet.track_id() != track_id {
+                continue;
+            }
+
+            let decoded = match decoder.decode(&packet) {
+                Ok(decoded) => decoded,
+                Err(SymphoniaError::DecodeError(_)) => continue,
+                Err(SymphoniaError::IoError(error))
+                    if error.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            };
+
+            let spec = decoded.spec();
+            let decoded_channels = spec.channels.count() as u16;
+            if spec.rate == 0 || decoded_channels == 0 {
+                return Err(Error::invalid_data(
+                    "Invalid decoded audio sample rate or channel count",
+                ));
+            }
+            if saw_frames
+                && (sample_rate != Some(spec.rate) || channel_mask != Some(spec.channels.bits()))
+            {
+                return Err(Error::invalid_data(
+                    "Audio stream changes sample rate or channel layout",
+                ));
+            }
+            // MP4 can leave channel metadata in codec configuration rather than the container track.
+            sample_rate = Some(spec.rate);
+            channels = Some(decoded_channels);
+            channel_mask = Some(spec.channels.bits());
+
+            saw_frames |= decoded.frames() > 0;
+            let block_frames = decoded.frames();
+            let skip = delay_remaining.min(block_frames);
+            delay_remaining -= skip;
+            frames = frames
+                .checked_add(block_frames - skip)
+                .ok_or_else(|| Error::invalid_data("Audio frame count is too large"))?;
+            let DecodeMode::VisitSamples(visit) = &mut mode else {
+                continue;
+            };
+            if skip == block_frames {
+                continue;
+            }
+            let interleaved = conversion.interleaved(decoded);
+            let samples = &interleaved[skip * usize::from(decoded_channels)..];
+            if !samples.is_empty() {
+                visit(
+                    sample_rate.expect("decoded sample rate"),
+                    decoded_channels,
+                    samples,
+                )?;
+            }
+        }
+
+        let sample_rate = sample_rate.ok_or(Error::MissingMetadata {
+            name: "sample_rate",
         })?;
-    let track_id = track.id;
-    let mut codec_params = track.codec_params.clone();
+        let channels = channels.ok_or(Error::MissingMetadata { name: "channels" })?;
+        if sample_rate == 0 || channels == 0 {
+            return Err(Error::invalid_data(
+                "Invalid decoded audio sample rate or channel count",
+            ));
+        }
+        Ok((
+            DecodedInfo {
+                sample_rate,
+                channels,
+                channel_mask,
+                frames,
+            },
+            format.into_inner(),
+        ))
+    }
+}
+
+fn normalize_codec_parameters(codec_params: &mut CodecParameters) {
     if codec_params.codec == CODEC_TYPE_ALAC {
         // CAF can wrap ALAC configuration in legacy frma/alac atoms; the decoder wants the payload.
         const WRAPPER: &[u8] = b"\x00\x00\x00\x0cfrmaalac\x00\x00\x00\x24alac\x00\x00\x00\x00";
@@ -238,151 +373,6 @@ fn decode_audio_stream(
             && cookie.starts_with(WRAPPER)
         {
             codec_params.extra_data = Some(cookie[WRAPPER.len()..].into());
-        }
-    }
-    let mut sample_rate = codec_params.sample_rate;
-    let mut channels = codec_params
-        .channels
-        .map(|channels| channels.count() as u16);
-    let mut channel_mask = codec_params.channels.map(|channels| channels.bits());
-    let mut delay_remaining = codec_params.delay.unwrap_or(0) as usize;
-    let mut decoder = get_codecs().make(&codec_params, &DecoderOptions::default())?;
-
-    let mut samples = Vec::new();
-    let mut conversion: Option<SampleBuffer<i16>> = None;
-    let mut saw_frames = false;
-    let mut frames = 0_usize;
-    loop {
-        let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(SymphoniaError::IoError(error))
-                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
-            Err(error) => return Err(error.into()),
-        };
-
-        if packet.track_id() != track_id {
-            continue;
-        }
-
-        let decoded = match decoder.decode(&packet) {
-            Ok(decoded) => decoded,
-            Err(SymphoniaError::DecodeError(_)) => continue,
-            Err(SymphoniaError::IoError(error))
-                if error.kind() == std::io::ErrorKind::UnexpectedEof =>
-            {
-                break;
-            }
-            Err(error) => return Err(error.into()),
-        };
-
-        let spec = decoded.spec();
-        let decoded_channels = spec.channels.count() as u16;
-        if spec.rate == 0 || decoded_channels == 0 {
-            return Err(Error::invalid_data(
-                "Invalid decoded audio sample rate or channel count",
-            ));
-        }
-        if saw_frames
-            && (sample_rate != Some(spec.rate) || channel_mask != Some(spec.channels.bits()))
-        {
-            return Err(Error::invalid_data(
-                "Audio stream changes sample rate or channel layout",
-            ));
-        }
-        // MP4 can leave channel metadata in codec configuration rather than the container track.
-        sample_rate = Some(spec.rate);
-        channels = Some(decoded_channels);
-        channel_mask = Some(spec.channels.bits());
-
-        saw_frames |= decoded.frames() > 0;
-        let block_frames = decoded.frames();
-        let skip = delay_remaining.min(block_frames);
-        delay_remaining -= skip;
-        frames = frames
-            .checked_add(block_frames - skip)
-            .ok_or_else(|| Error::invalid_data("Audio frame count is too large"))?;
-        if count_only || skip == block_frames {
-            continue;
-        }
-        samples.clear();
-        let interleaved = match decoded {
-            AudioBufferRef::F32(buffer) => {
-                extend_interleaved_f32_samples(buffer.as_ref(), &mut samples);
-                samples.as_slice()
-            }
-            AudioBufferRef::F64(buffer) => {
-                extend_interleaved_f64_samples(buffer.as_ref(), &mut samples);
-                samples.as_slice()
-            }
-            _ => {
-                let spec = *decoded.spec();
-                let required = decoded.capacity() * spec.channels.count();
-                if conversion
-                    .as_ref()
-                    .is_none_or(|buffer| buffer.capacity() < required)
-                {
-                    conversion = Some(SampleBuffer::new(decoded.capacity() as u64, spec));
-                }
-                let sample_buffer = conversion.as_mut().expect("conversion buffer initialized");
-                sample_buffer.copy_interleaved_ref(decoded);
-                sample_buffer.samples()
-            }
-        };
-        let samples = &interleaved[skip * usize::from(decoded_channels)..];
-        if !samples.is_empty() {
-            visit(
-                sample_rate.expect("decoded sample rate"),
-                decoded_channels,
-                samples,
-            )?;
-        }
-    }
-
-    let sample_rate = sample_rate.ok_or(Error::MissingMetadata {
-        name: "sample_rate",
-    })?;
-    let channels = channels.ok_or(Error::MissingMetadata { name: "channels" })?;
-    if sample_rate == 0 || channels == 0 {
-        return Err(Error::invalid_data(
-            "Invalid decoded audio sample rate or channel count",
-        ));
-    }
-    Ok((
-        DecodedInfo {
-            sample_rate,
-            channels,
-            channel_mask,
-            frames,
-        },
-        format.into_inner(),
-    ))
-}
-
-fn extend_interleaved_f32_samples(
-    buffer: &symphonia::core::audio::AudioBuffer<f32>,
-    samples: &mut Vec<i16>,
-) {
-    let channels = buffer.spec().channels.count();
-    for frame in 0..buffer.frames() {
-        for channel in 0..channels {
-            let sample = buffer.chan(channel)[frame];
-            samples.push(clamp_float_to_i16(f64::from(sample) * f64::from(i16::MAX)));
-        }
-    }
-}
-
-fn extend_interleaved_f64_samples(
-    buffer: &symphonia::core::audio::AudioBuffer<f64>,
-    samples: &mut Vec<i16>,
-) {
-    let channels = buffer.spec().channels.count();
-    for frame in 0..buffer.frames() {
-        for channel in 0..channels {
-            let sample = buffer.chan(channel)[frame];
-            samples.push(clamp_float_to_i16(sample * f64::from(i16::MAX)));
         }
     }
 }
