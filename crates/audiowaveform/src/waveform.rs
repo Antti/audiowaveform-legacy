@@ -25,7 +25,8 @@ pub struct WaveformPoint {
 pub enum AmplitudeScale {
     /// Scale using a fixed multiplier.
     Fixed(f64),
-    /// Scale automatically so the current range fills the full 16-bit output range.
+    /// Scale the largest absolute peak to 32767, preserving relative amplitudes.
+    /// Silent ranges are unchanged.
     Auto,
 }
 
@@ -333,18 +334,12 @@ impl Waveform {
             }
         }
 
-        let high_scale = if high == 0 {
+        let peak = low.abs().max(high.abs());
+        Ok(if peak == 0 {
             1.0
         } else {
-            32767.0 / f64::from(high)
-        };
-        let low_scale = if low == 0 {
-            1.0
-        } else {
-            32767.0 / f64::from(low)
-        };
-
-        Ok(high_scale.min(low_scale).abs())
+            32767.0 / f64::from(peak)
+        })
     }
 
     /// Scales all waveform points by the provided amplitude strategy.
@@ -525,9 +520,15 @@ impl Waveform {
         Self::validate_metadata(sample_rate, samples_per_pixel, channels)?;
 
         let bits = if flags & FLAG_8_BIT != 0 { 8 } else { 16 };
-        let mut data = Vec::with_capacity(length * usize::from(channels) * 2);
+        let values = length
+            .checked_mul(usize::from(channels))
+            .and_then(|count| count.checked_mul(2))
+            .ok_or_else(|| Error::invalid_data("Waveform length is too large"))?;
+        // A truncated file may contain far fewer points than its header claims.
+        // Allocate only for samples actually read, not the untrusted length.
+        let mut data = Vec::new();
         if bits == 8 {
-            for _ in 0..length * usize::from(channels) {
+            for _ in 0..values / 2 {
                 let Some(min_value) = read_optional_i8(&mut reader)? else {
                     break;
                 };
@@ -538,7 +539,7 @@ impl Waveform {
                 data.push(i16::from(max_value) * 256);
             }
         } else {
-            for _ in 0..length * usize::from(channels) * 2 {
+            for _ in 0..values {
                 let Some(value) = read_optional_i16(&mut reader)? else {
                     break;
                 };
@@ -784,7 +785,7 @@ mod tests {
         assert_eq!(
             auto.point(0, 1).expect("auto point"),
             WaveformPoint {
-                min: -32_767,
+                min: -24_575,
                 max: 32_767,
             }
         );

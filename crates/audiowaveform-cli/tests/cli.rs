@@ -26,6 +26,89 @@ use self::support::{assert_png_bytes_match_fixture, assert_png_file_matches_fixt
 
 const EXACT_POINT_JSON: &str = r#"{"version":2,"channels":1,"sample_rate":48000,"samples_per_pixel":3,"bits":16,"length":3,"data":[-100,5,-200,100,-300,200],"source_frames":11}"#;
 
+#[cfg(feature = "render")]
+#[test]
+fn invalid_render_coordinates_preserve_existing_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.png");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "--input-format", "json", "--start", "1e308", "-o"])
+        .arg(&output)
+        .write_stdin(EXACT_POINT_JSON)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("coordinate limit"));
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+}
+
+#[cfg(feature = "wav-output")]
+#[test]
+fn invalid_wav_header_metadata_preserves_existing_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.wav");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args([
+            "-q",
+            "--input-format",
+            "raw",
+            "--raw-format",
+            "s16le",
+            "--raw-samplerate",
+            "2147483647",
+            "--raw-channels",
+            "2",
+            "-o",
+        ])
+        .arg(&output)
+        .write_stdin([0_u8; 4])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("WAV byte rate limit"));
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+}
+
+#[cfg(all(feature = "format-wav", feature = "wav-output"))]
+#[test]
+fn failed_wav_decode_preserves_existing_output() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.wav");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "--input-format", "wav", "-o"])
+        .arg(&output)
+        .write_stdin("invalid audio")
+        .assert()
+        .failure();
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+}
+
+#[test]
+fn rejects_wave64_without_touching_the_destination() {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("existing.dat");
+    std::fs::write(&output, b"keep existing output").unwrap();
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["-q", "-i", "unsupported.w64", "-o"])
+        .arg(&output)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Unsupported format: w64"));
+    assert_eq!(std::fs::read(&output).unwrap(), b"keep existing output");
+
+    Command::cargo_bin("audiowaveform")
+        .unwrap()
+        .args(["--input-format", "w64", "--output-format", "dat"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value 'w64'"));
+}
+
 #[test]
 fn rejects_unrepresentable_exact_point_dat_without_truncating_the_destination() {
     let directory = tempfile::tempdir().unwrap();

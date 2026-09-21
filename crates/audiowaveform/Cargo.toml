@@ -69,5 +69,6 @@ tempfile.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
+hound.workspace = true
 image.workspace = true
 predicates.workspace = true

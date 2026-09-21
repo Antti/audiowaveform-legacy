@@ -1,6 +1,4 @@
 use std::fs::File;
-#[cfg(any(feature = "render", feature = "wav-output"))]
-use std::io::Write;
 use std::io::{self, Cursor, Read};
 use std::path::Path;
 use std::process::ExitCode;
@@ -16,9 +14,11 @@ use audiowaveform::{
     generate_waveform_from_raw_reader,
 };
 #[cfg(feature = "render")]
-use audiowaveform::{BarStyle, RenderOptions, RenderStyle, write_waveform_png};
+use audiowaveform::{
+    BarStyle, RenderOptions, RenderStyle, render_waveform_to_path, write_waveform_png,
+};
 #[cfg(feature = "wav-output")]
-use audiowaveform::{decode_raw_audio_reader, write_pcm_as_wav};
+use audiowaveform::{decode_raw_audio_reader, write_pcm_as_wav, write_pcm_to_wav_path};
 use clap::builder::styling::{AnsiColor, Styles};
 use clap::{CommandFactory, Parser, ValueEnum};
 
@@ -181,7 +181,6 @@ enum CliFormat {
     Mp1,
     Mp2,
     Mp3,
-    #[value(alias = "w64")]
     Wav,
     Flac,
     #[value(alias = "oga")]
@@ -209,7 +208,8 @@ impl CliFormat {
             "mp1" => Ok(Self::Mp1),
             "mp2" => Ok(Self::Mp2),
             "mp3" => Ok(Self::Mp3),
-            "wav" | "w64" => Ok(Self::Wav),
+            "wav" => Ok(Self::Wav),
+            "w64" => Err("Unsupported format: w64".to_string()),
             "flac" => Ok(Self::Flac),
             "ogg" | "oga" => Ok(Self::Ogg),
             "opus" => Ok(Self::Opus),
@@ -449,32 +449,30 @@ fn run(cli: Cli) -> Result<(), String> {
         #[cfg(feature = "wav-output")]
         {
             let bytes = read_input_bytes(cli.input_filename.as_deref())?;
-            let mut output = create_output(cli.output_filename.as_deref())?;
-            match input_format {
-                CliFormat::Raw => {
-                    let pcm = decode_raw_audio_reader(
-                        Cursor::new(bytes),
-                        raw_config.as_ref().expect("validated raw config"),
-                    )
-                    .map_err(stringify_error)?;
-                    write_pcm_as_wav(&pcm, &mut output).map_err(stringify_error)?;
-                }
+            let pcm = match input_format {
+                CliFormat::Raw => decode_raw_audio_reader(
+                    Cursor::new(bytes),
+                    raw_config.as_ref().expect("validated raw config"),
+                )
+                .map_err(stringify_error)?,
                 _ => {
                     #[cfg(feature = "decode")]
                     {
-                        let pcm = decode_audio_from_reader(
-                            Cursor::new(bytes),
-                            input_format.as_audio_format(),
-                        )
-                        .map_err(stringify_error)?;
-                        write_pcm_as_wav(&pcm, &mut output).map_err(stringify_error)?;
+                        decode_audio_from_reader(Cursor::new(bytes), input_format.as_audio_format())
+                            .map_err(stringify_error)?
                     }
                     #[cfg(not(feature = "decode"))]
                     return Err(stringify_error(Error::FeatureDisabled {
                         feature: "decode",
                     }));
                 }
+            };
+            if is_stdio_filename(cli.output_filename.as_deref()) {
+                write_pcm_as_wav(&pcm, io::stdout().lock())
+            } else {
+                write_pcm_to_wav_path(&pcm, cli.output_filename.as_deref().expect("checked stdio"))
             }
+            .map_err(stringify_error)?;
         }
     } else if input_format.is_audio_input()
         && matches!(output_format, CliFormat::Dat | CliFormat::Json)
@@ -563,8 +561,16 @@ fn run(cli: Cli) -> Result<(), String> {
                 png_compression_level: _compression.map(|value| value as u8),
             };
 
-            let mut output = create_output(cli.output_filename.as_deref())?;
-            write_waveform_png(&waveform, &render_options, &mut output).map_err(stringify_error)?;
+            if is_stdio_filename(cli.output_filename.as_deref()) {
+                write_waveform_png(&waveform, &render_options, io::stdout().lock())
+            } else {
+                render_waveform_to_path(
+                    &waveform,
+                    &render_options,
+                    cli.output_filename.as_deref().expect("checked stdio"),
+                )
+            }
+            .map_err(stringify_error)?;
         }
     } else {
         return Err(format!(
@@ -828,17 +834,6 @@ fn write_waveform_output(
         waveform.write_to_path(filename.expect("checked stdio"), Some(format), bits)
     }
     .map_err(stringify_error)
-}
-
-#[cfg(any(feature = "render", feature = "wav-output"))]
-fn create_output(filename: Option<&str>) -> Result<Box<dyn Write>, String> {
-    if is_stdio_filename(filename) {
-        Ok(Box::new(io::stdout()))
-    } else {
-        File::create(filename.expect("checked stdio"))
-            .map(|file| Box::new(file) as Box<dyn Write>)
-            .map_err(|error| error.to_string())
-    }
 }
 
 fn is_stdio_filename(filename: Option<&str>) -> bool {

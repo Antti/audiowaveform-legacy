@@ -199,11 +199,20 @@ impl ScaleSpec {
                             format!("Invalid end time, must be greater than {start}"),
                         ));
                     }
-                    ((end - start) * sample_rate as f64) as u64
+                    let frames = (end - start) * f64::from(sample_rate);
+                    if !frames.is_finite() || frames >= u64::MAX as f64 {
+                        return Err(Error::invalid_argument(
+                            "time range",
+                            "Time range contains too many source frames",
+                        ));
+                    }
+                    frames as u64
                 } else {
                     frame_count as u64
                 };
-                (frames / u64::from(width_pixels)) as u32
+                u32::try_from(frames / u64::from(width_pixels)).map_err(|_| {
+                    Error::invalid_argument("image width", "Too many source frames per pixel")
+                })?
             }
         };
 
@@ -587,18 +596,14 @@ fn parse_raw_sample(bytes: &[u8], format: RawSampleFormat) -> i16 {
         RawSampleFormat::U8 => (i16::from(bytes[0]) - 128) << 8,
         RawSampleFormat::S16Le => i16::from_le_bytes([bytes[0], bytes[1]]),
         RawSampleFormat::S16Be => i16::from_be_bytes([bytes[0], bytes[1]]),
-        RawSampleFormat::S24Le => {
-            clamp_float_to_i16(sign_extend_24([bytes[0], bytes[1], bytes[2]]) as f64 / 256.0)
+        RawSampleFormat::S24Le => (sign_extend_24([bytes[0], bytes[1], bytes[2]]) >> 8) as i16,
+        RawSampleFormat::S24Be => (sign_extend_24([bytes[2], bytes[1], bytes[0]]) >> 8) as i16,
+        RawSampleFormat::S32Le => {
+            (i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) >> 16) as i16
         }
-        RawSampleFormat::S24Be => {
-            clamp_float_to_i16(sign_extend_24([bytes[2], bytes[1], bytes[0]]) as f64 / 256.0)
+        RawSampleFormat::S32Be => {
+            (i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) >> 16) as i16
         }
-        RawSampleFormat::S32Le => clamp_float_to_i16(
-            i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64 / 65_536.0,
-        ),
-        RawSampleFormat::S32Be => clamp_float_to_i16(
-            i32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64 / 65_536.0,
-        ),
         RawSampleFormat::F32Le => clamp_float_to_i16(
             f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64
                 * f64::from(i16::MAX),

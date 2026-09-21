@@ -13,7 +13,7 @@
 //! `format-*` bundle for decoding, or `all-formats` for every supported input format.
 //! Each format enables the shared `decode` plumbing. `render` enables PNG rendering;
 //! `wav-output` enables PCM16 WAV writing independently of input decoding.
-//! Opus and HE-AAC are not supported, even with `all-formats` enabled.
+//! Wave64 (`.w64`), Opus, and HE-AAC are not supported, even with `all-formats` enabled.
 //!
 //! # Examples
 //!
@@ -86,8 +86,8 @@ pub use render::{
     BarStyle, RenderOptions, RenderStyle, render_waveform, render_waveform_to_path,
     write_waveform_png,
 };
-#[cfg(feature = "wav-output")]
-pub use wav::write_pcm_as_wav;
 #[cfg(all(feature = "decode", feature = "wav-output"))]
 pub use wav::{transcode_audio_path_to_wav_path, transcode_audio_reader_to_wav_writer};
+#[cfg(feature = "wav-output")]
+pub use wav::{write_pcm_as_wav, write_pcm_to_wav_path};
 pub use waveform::{AmplitudeScale, Waveform, WaveformPoint};
