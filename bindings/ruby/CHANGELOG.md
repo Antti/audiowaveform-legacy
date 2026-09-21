@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Load DAT samples without reserving memory from the advertised length header.
+- Preserve relative amplitudes when automatically normalizing asymmetric peaks.
+- Reject overflowing automatic-fit scales instead of silently wrapping them.
+- Correct the format documentation: Wave64 (`.w64`) is unsupported.
 - Keep waveform generation from retaining the entire decoded recording in RAM.
   Fixed scales aggregate decoded blocks in one pass; `points:` counts frames
   and aggregates in two passes, including files with missing duration metadata.

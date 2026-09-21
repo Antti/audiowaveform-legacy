@@ -13,7 +13,7 @@ audiowaveform \- generates and renders waveforms from audio files
 .B audiowaveform
 generates waveform data from AAC-LC, ALAC, MPEG audio, WAV, FLAC, Ogg,
 AIFF, CAF, MP4/M4A, Matroska/WebM, and raw PCM audio sources.
-Opus and HE-AAC decoding are not supported. Custom builds can omit input formats,
+Wave64 (.w64), Opus, and HE-AAC decoding are not supported. Custom builds can omit input formats,
 PNG rendering, or WAV writing through Cargo features. Waveform data can be used to produce a visual rendering of the audio,
 similar in appearance to audio editing applications.
 
@@ -65,7 +65,7 @@ Disable status messages.
 .B --input-filename\fR, \fB-i\fR <filename>
 Input filename, which should be an audio file or a binary or JSON waveform data
 file. By default, \fBaudiowaveform\fR uses the extension to identify the container
-(.aac, .adts, .mp1, .mp2, .mp3, .wav, .w64, .flac, .ogg, .oga, .aiff, .aif,
+(.aac, .adts, .mp1, .mp2, .mp3, .wav, .flac, .ogg, .oga, .aiff, .aif,
 \&.aifc, .caf, .mp4, .m4a, .m4b, .m4r, .m4v, .mov, .mkv, .mka, .webm,
 \&.raw, .dat, or .json). This can be
 overridden by the \fB--input-format\fR option. If the \fB--input-filename\fR
@@ -190,7 +190,8 @@ image border.
 .B --amplitude-scale\fR <scale> (default: 1)
 When creating a waveform image or waveform data file, specifies an amplitude
 scaling (or vertical zoom) to apply to the waveform. Must be either a number
-or \fBauto\fR, which scales the waveform to the maximum height.
+or \fBauto\fR, which scales the largest absolute peak to 32767 while preserving
+relative amplitudes. Silence is unchanged.
 
 .TP
 .B --waveform-style\fR <style> (default: normal)

@@ -139,13 +139,17 @@ AudioWaveform.generate("quiet.wav", amplitude_scale: 1.5)
 AudioWaveform.generate("quiet.wav", amplitude_scale: :auto)
 ```
 
+Automatic scaling preserves relative amplitudes and maps the largest absolute
+peak to 32767; silence is unchanged.
+
 Both source and precompiled gems enable the Rust library's `all-formats` feature:
-AAC-LC/ADTS, AAC-LC and ALAC in M4A/MP4, MP1/MP2/MP3, WAV/W64 (PCM and ADPCM),
+AAC-LC/ADTS, AAC-LC and ALAC in M4A/MP4, MP1/MP2/MP3, WAV (PCM and ADPCM),
 FLAC, Ogg (Vorbis and FLAC), AIFF, CAF (PCM and ALAC), and supported audio tracks
 in Matroska/WebM. No FFmpeg installation is required for decoding.
 
-AAC-LC supports mono and stereo. HE-AAC and Opus remain unsupported, including
-Opus inside Ogg/WebM/MP4. Raw PCM input is not currently exposed by the gem.
+AAC-LC supports mono and stereo. Wave64 (`.w64`), HE-AAC, and Opus remain
+unsupported, including Opus inside Ogg/WebM/MP4. Raw PCM input is not currently
+exposed by the gem.
 The filename extension identifies the container; an enabled container can still
 contain an unsupported codec. Such files raise `AudioWaveform::Error`.
 AAC/MP4 waveform duration can include encoder delay and padding; gapless

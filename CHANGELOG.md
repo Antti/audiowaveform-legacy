@@ -6,6 +6,21 @@ are kept here as release history context.
 
 ## Unreleased
 
+- Grow DAT sample storage only as payload is read instead of reserving memory
+  from an untrusted length header; check length arithmetic for overflow.
+- Preserve existing output files when WAV decoding or PNG option validation
+  fails in the library and CLI, and allow WAV transcoding when input and output
+  refer to the same file. Add `write_pcm_to_wav_path` for validated PCM output.
+- Propagate PNG final-chunk and flush failures to the caller.
+- Normalize asymmetric signals using the largest absolute peak without clipping
+  the opposite peak. Silence remains unchanged.
+- Check WAV header limits, fit-width scales, and render coordinates before
+  arithmetic can overflow; use wider intermediates for tall images.
+- Clip bar drawing loops to the canvas and constrain rounded corners to their
+  rectangle. Draw waveform borders after the waveform so they remain visible.
+  PNG fixtures reflect the corrected borders; interior pixels are unchanged.
+- Match raw signed 24/32-bit PCM quantization to container decoding.
+- Report Wave64 (`.w64`) as unsupported and remove incorrect support claims.
 - Generate waveform peaks incrementally without buffering the complete decoded
   recording. Exact point counts use a counting pass followed by aggregation.
 - Stream raw PCM pipes at fixed scales and use temporary files when input must

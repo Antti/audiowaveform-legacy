@@ -32,8 +32,8 @@ waveforms in process through the same library crate.
 - Transcode decoded audio or raw PCM input to PCM16 WAV
 - Use path-based, stream-based, or in-memory APIs from the library crate
 
-Opus and HE-AAC are unsupported by the current decoder. AAC-LC supports mono and
-stereo. Enabling a container such as WebM does not add unsupported codecs.
+Wave64 (`.w64`), Opus, and HE-AAC are unsupported by the current decoder. AAC-LC
+supports mono and stereo. Enabling a container such as WebM does not add unsupported codecs.
 AAC/MP4 decoding does not apply gapless trimming, so decoded audio and waveform
 duration can include encoder delay and padding.
 
@@ -84,7 +84,7 @@ audiowaveform = { version = "1.10.3", features = ["format-mp3", "format-m4a"] }
 | `format-mkv` / `format-webm` | Supported audio codecs in Matroska/WebM (`.mkv`, `.mka`, `.webm`); no Opus |
 | `format-mp1`, `format-mp2`, `format-mp3` | MPEG audio layers I, II, and III respectively |
 | `format-ogg` | Vorbis and FLAC in Ogg (`.ogg`, `.oga`) |
-| `format-wav` | PCM and ADPCM in WAV/W64 |
+| `format-wav` | PCM and ADPCM in WAV |
 | `all-formats` | All input format bundles above |
 | `render` | PNG rendering |
 | `wav-output` | PCM16 WAV writing |
@@ -110,13 +110,11 @@ fn main() -> Result<(), audiowaveform::Error> {
 Render a PNG from a stored waveform (requires `render`):
 
 ```rust,no_run
-use std::fs::File;
-
-use audiowaveform::{RenderOptions, Waveform, write_waveform_png};
+use audiowaveform::{RenderOptions, Waveform, render_waveform_to_path};
 
 fn main() -> Result<(), audiowaveform::Error> {
     let waveform = Waveform::load_from_path("input.dat", None)?;
-    write_waveform_png(&waveform, &RenderOptions::default(), File::create("output.png")?)?;
+    render_waveform_to_path(&waveform, &RenderOptions::default(), "output.png")?;
     Ok(())
 }
 ```
@@ -135,6 +133,15 @@ fn main() -> Result<(), audiowaveform::Error> {
 ```
 
 Additional examples live in `crates/audiowaveform/examples`.
+
+File output APIs validate before opening the destination: `render_waveform_to_path`
+preserves existing PNG files when rendering options are invalid, and
+`write_pcm_to_wav_path` (requires `wav-output`) rejects unrepresentable WAV headers
+before writing. `transcode_audio_path_to_wav_path` also finishes decoding first,
+allowing input and output to name the same file.
+
+`AmplitudeScale::Auto` preserves relative amplitudes, maps the largest absolute
+peak to 32767, and leaves silence unchanged.
 
 Use `ScaleSpec::Points(110)` in `GenerateOptions::scale` to generate exactly 110
 min/max pairs per channel from nonempty audio. Generation counts decoded PCM
@@ -240,7 +247,7 @@ Audio input:
 - `mkv`, `mka`, and `webm` (supported audio tracks only; no Opus)
 - `aiff`, `aif`, and `aifc`
 - `caf`
-- `wav` and `w64`
+- `wav`
 - `flac`
 - `ogg` and `oga`
 - `raw`
