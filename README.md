@@ -1,3 +1,10 @@
+> **Legacy archive.** This repository preserves the former GPL implementation,
+> its release tags, and the sources for Ruby gems 0.1.0, 0.2.0, and 0.2.1.
+> Active development has moved to the independently implemented replacement at
+> [Antti/audiowaveform](https://github.com/Antti/audiowaveform).
+> Historical releases are available under [this archive's releases](https://github.com/Antti/audiowaveform-legacy/releases)
+> and remain published on RubyGems under their original licenses.
+
 # audiowaveform
 
 [![CI](https://github.com/Antti/audiowaveform/actions/workflows/rust.yml/badge.svg)](https://github.com/Antti/audiowaveform/actions/workflows/rust.yml)
