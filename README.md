@@ -14,6 +14,10 @@ It is a Rust rewrite of the original BBC `audiowaveform` project:
 The original project was created by Chris Needham and contributors at BBC
 Research & Development.
 
+Rust releases start at `0.1.0` and use `rust-vX.Y.Z` tags, independently of the
+historical C++ and Ruby gem versions. The Rust API is still evolving; breaking
+changes may occur in subsequent `0.x` minor releases.
+
 The repository's main workspace remains Rust-only:
 
 - `crates/audiowaveform`: reusable library crate
@@ -51,7 +55,13 @@ Run the CLI:
 cargo run -p audiowaveform-cli -- -i fixtures/test_file_stereo.wav -o output.dat
 ```
 
-Install the CLI locally:
+Install the CLI from crates.io:
+
+```sh
+cargo install audiowaveform-cli --version 0.1.0 --locked
+```
+
+Or install it from a checkout:
 
 ```sh
 cargo install --path crates/audiowaveform-cli
@@ -71,7 +81,7 @@ and output capabilities explicitly:
 
 ```toml
 [dependencies]
-audiowaveform = { version = "1.10.3", features = ["format-mp3", "format-m4a"] }
+audiowaveform = { version = "0.1.0", features = ["format-mp3", "format-m4a"] }
 ```
 
 | Cargo feature | Capability |
@@ -86,7 +96,7 @@ audiowaveform = { version = "1.10.3", features = ["format-mp3", "format-m4a"] }
 | `format-ogg` | Vorbis and FLAC in Ogg (`.ogg`, `.oga`) |
 | `format-wav` | PCM and ADPCM in WAV |
 | `all-formats` | All input format bundles above |
-| `render` | PNG rendering |
+| `render` | PNG rendering and color/palette types |
 | `wav-output` | PCM16 WAV writing |
 
 `format-mp4` aliases `format-m4a`; `format-webm` aliases `format-mkv`.
@@ -214,7 +224,10 @@ cargo build -p audiowaveform-cli --no-default-features --features format-mp3,for
 
 Add `render` or `wav-output` for those outputs. With no features, the CLI can
 still process raw PCM and convert/resample waveform data. Requests for omitted
-formats or outputs report the required Cargo feature.
+formats or outputs report the required Cargo feature. Image height, color, bar,
+axis-label, and PNG compression options are available only with `render`.
+Width, zoom, and time-range options remain available for waveform generation
+and resampling.
 
 Generate `.dat` waveform data:
 

@@ -3,7 +3,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 
 use image::{Rgba, RgbaImage};
-use png::{BitDepth, ColorType, Compression, Encoder, FilterType};
+use png::{BitDepth, ColorType, Compression, Encoder, Filter};
 
 use crate::Error;
 use crate::{AmplitudeScale, Color, Waveform, WaveformColors};
@@ -188,13 +188,14 @@ fn write_png_image<W: Write>(
     let mut encoder = Encoder::new(writer, image.width(), image.height());
     encoder.set_color(ColorType::Rgba);
     encoder.set_depth(BitDepth::Eight);
-    encoder.set_filter(FilterType::NoFilter);
     encoder.set_compression(match options.png_compression_level {
         Some(0) => Compression::Fast,
         Some(level @ 1..=6) if level <= 3 => Compression::Fast,
-        Some(7..=9) => Compression::Best,
-        _ => Compression::Default,
+        Some(7..=9) => Compression::High,
+        _ => Compression::Balanced,
     });
+    // set_compression also selects a filter in png 0.18; keep our explicit policy.
+    encoder.set_filter(Filter::NoFilter);
     let mut png = encoder.write_header()?;
     png.write_image_data(image.as_raw())?;
     png.finish()?;

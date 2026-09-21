@@ -198,6 +198,7 @@ fn prints_help_and_version() {
         .stdout(predicate::str::contains("AudioWaveform v"));
 }
 
+#[cfg(feature = "render")]
 #[test]
 fn accepts_spaced_default_compression_level() {
     Command::cargo_bin("audiowaveform")
@@ -223,6 +224,7 @@ fn requires_input_and_output_configuration() {
         .stderr("Error: Must specify either output filename or output format\n");
 }
 
+#[cfg(feature = "render")]
 #[test]
 fn rejects_invalid_enum_values_via_clap() {
     Command::cargo_bin("audiowaveform")

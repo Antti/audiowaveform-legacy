@@ -4,10 +4,17 @@ This repository is a Rust rewrite of the original BBC `audiowaveform`
 project. Historical entries below are inherited from that original project and
 are kept here as release history context.
 
-## Unreleased
+## Rust 0.1.0 (2026-09-21)
 
-- Decode ID3-prefixed ADTS/AAC without invoking Symphonia's unsafe duration
-  estimator, and reject unsupported WAV channel counts and inconsistent masks
+First Rust library and CLI release, versioned independently from the historical
+C++ releases below. The Rust API is still evolving; `0.x` minor releases may
+contain breaking changes.
+
+- Update Rust dependencies, including Symphonia 0.6.1, PNG 0.18.1, and rb-sys
+  0.9.130. Preserve waveform quantization and leading-delay handling, reuse one
+  PCM conversion buffer, and retain metadata-aware format detection.
+- Decode ID3-prefixed ADTS/AAC with Symphonia's corrected duration estimator,
+  and reject unsupported WAV channel counts and inconsistent masks
   before demuxing. Retry interrupted encoded reads.
 - Retain known speaker layouts in decoded PCM and WAV transcoding, including
   side-surround and nonstandard mono/stereo positions. Write WAV samples in
@@ -21,7 +28,8 @@ are kept here as release history context.
   for resampling on 32-bit platforms.
 - Remove per-point heap allocations, reuse owned waveform storage for amplitude
   scaling, skip PCM conversion in counting passes, and reuse integer conversion
-  buffers between decoded packets.
+  buffers between decoded packets. Preallocate waveform output when its size is
+  known.
 - Grow DAT sample storage only as payload is read instead of reserving memory
   from an untrusted length header; check length arithmetic for overflow.
 - Preserve existing output files when WAV decoding or PNG option validation
@@ -48,6 +56,7 @@ are kept here as release history context.
   before creating or truncating the output file.
 - Make the Rust library minimal by default, with opt-in `format-*`, `render`,
   and `wav-output` features and an `all-formats` input bundle.
+- Gate color/palette types and rendering-only CLI options behind `render`.
 - Enable every supported input format, PNG rendering, and WAV output by default
   in the CLI; allow custom builds with `--no-default-features`.
 - Add AAC-LC/ADTS, MP4/M4A (including ALAC), AIFF, CAF, MPEG layers I/II,

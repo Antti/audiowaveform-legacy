@@ -178,7 +178,7 @@ mod encoded {
 
     struct ChangingReader {
         inner: Cursor<Vec<u8>>,
-        has_read: bool,
+        read_through: u64,
         fail_read: bool,
         replay: Option<Replay>,
     }
@@ -187,7 +187,7 @@ mod encoded {
         fn new(replay: Replay) -> Self {
             Self {
                 inner: Cursor::new(wav(1000, 48_000, 2)),
-                has_read: false,
+                read_through: 0,
                 fail_read: false,
                 replay: Some(replay),
             }
@@ -199,15 +199,24 @@ mod encoded {
             if self.fail_read && self.inner.position() >= 512 {
                 return Err(io::Error::other("replay read failed"));
             }
-            self.has_read = true;
+            let position = self.inner.position();
             let count = output.len().min(512);
-            self.inner.read(&mut output[..count])
+            let read = self.inner.read(&mut output[..count])?;
+            if position == self.read_through {
+                self.read_through += read as u64;
+            }
+            Ok(read)
         }
     }
 
     impl Seek for ChangingReader {
         fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-            if position == SeekFrom::Start(0) && self.has_read {
+            // Symphonia 0.6 also seeks back after probing trailing metadata.
+            // Inject the fault/change only after reading the complete audio
+            // from the start, when generation actually replays the first pass.
+            if position == SeekFrom::Start(0)
+                && self.read_through == self.inner.get_ref().len() as u64
+            {
                 match self.replay.take() {
                     Some(Replay::FailSeek) => return Err(io::Error::other("rewind failed")),
                     Some(Replay::FailRead) => self.fail_read = true,
@@ -238,7 +247,12 @@ mod encoded {
                 (1000, 44_100, 2),
                 (1000, 48_000, 1),
             ] {
-                let reader = ChangingReader::new(Replay::Replace(wav(frames, rate, channels)));
+                let mut replacement = wav(frames, rate, channels);
+                // Keep trailing-metadata probe positions readable even when
+                // the WAV's declared audio payload shrinks. This exercises the
+                // decoded frame/layout comparison rather than an earlier EOF.
+                replacement.resize(replacement.len().max(wav(1000, 48_000, 2).len()), 0);
+                let reader = ChangingReader::new(Replay::Replace(replacement));
                 let error = generate_waveform_from_reader(reader, Some(AudioFormat::Wav), &options)
                     .unwrap_err();
                 assert!(matches!(error, Error::InvalidData { .. }), "{error}");
@@ -249,6 +263,24 @@ mod encoded {
                 );
             }
         }
+    }
+
+    #[test]
+    fn replay_rejects_a_source_that_becomes_truncated() {
+        let mut truncated = wav(1000, 48_000, 2);
+        truncated.truncate(512);
+        let options = GenerateOptions {
+            scale: ScaleSpec::Points(110),
+            ..Default::default()
+        };
+        assert!(
+            generate_waveform_from_reader(
+                ChangingReader::new(Replay::Replace(truncated)),
+                Some(AudioFormat::Wav),
+                &options,
+            )
+            .is_err()
+        );
     }
 
     #[test]

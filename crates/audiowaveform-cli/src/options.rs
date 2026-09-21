@@ -1,10 +1,9 @@
+#[cfg(feature = "render")]
 use std::str::FromStr;
 
-use audiowaveform::{
-    AmplitudeScale, Color, Error, RawAudioConfig, ScaleSpec, WaveformColors, WaveformFormat,
-};
+use audiowaveform::{AmplitudeScale, Error, RawAudioConfig, ScaleSpec, WaveformFormat};
 #[cfg(feature = "render")]
-use audiowaveform::{RenderOptions, RenderStyle};
+use audiowaveform::{Color, RenderOptions, RenderStyle, WaveformColors};
 
 #[cfg(feature = "render")]
 use crate::args::CliWaveformStyle;
@@ -40,20 +39,18 @@ pub(super) struct Request {
 }
 
 pub(super) fn resolve(cli: Cli) -> Result<Request, String> {
+    #[cfg(feature = "render")]
     if cli.height < 1 {
         return Err("Invalid image height: minimum 1".to_string());
     }
     let input_format = resolve_format(cli.input_filename.as_deref(), cli.input_format, true)?;
     let output_format = resolve_format(cli.output_filename.as_deref(), cli.output_format, false)?;
     let bits = resolve_bits(cli.bits)?;
-    let _compression = resolve_compression(cli.compression)?;
+    #[cfg(feature = "render")]
+    let compression = resolve_compression(cli.compression)?;
     let amplitude = parse_amplitude_scale(&cli.amplitude_scale)?;
-    let _colors = resolve_colors(&cli)?;
-    let _axis_labels = if cli.with_axis_labels {
-        true
-    } else {
-        !cli.no_axis_labels
-    };
+    #[cfg(feature = "render")]
+    let colors = resolve_colors(&cli)?;
     #[cfg(feature = "render")]
     let render_style = resolve_render_style(&cli)?;
     let scale = resolve_scale(&cli)?;
@@ -104,10 +101,10 @@ pub(super) fn resolve(cli: Cli) -> Result<Request, String> {
         height: cli.height as u32,
         start_time: cli.start,
         amplitude_scale: amplitude,
-        axis_labels: _axis_labels,
+        axis_labels: cli.with_axis_labels || !cli.no_axis_labels,
         style: render_style,
-        colors: _colors,
-        png_compression_level: _compression.map(|value| value as u8),
+        colors,
+        png_compression_level: compression.map(|value| value as u8),
     };
     Ok(Request {
         input_filename: cli.input_filename,
@@ -151,6 +148,7 @@ fn resolve_bits(bits: Option<i32>) -> Result<Option<u8>, String> {
     }
 }
 
+#[cfg(feature = "render")]
 fn resolve_compression(compression: i32) -> Result<Option<i32>, String> {
     if (-1..=9).contains(&compression) {
         Ok((compression >= 0).then_some(compression))
@@ -218,6 +216,7 @@ fn resolve_scale(cli: &Cli) -> Result<ScaleSpec, String> {
     }
 }
 
+#[cfg(feature = "render")]
 fn resolve_colors(cli: &Cli) -> Result<WaveformColors, String> {
     let mut colors = cli.color_scheme.into_library().palette();
 
