@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 [dependencies]
 audiowaveform-core = { package = "audiowaveform", path = "../../../../crates/audiowaveform", default-features = false, features = ["all-formats"] }
 magnus = { version = "0.8.2", features = ["rb-sys"] }
-rb-sys = { version = "0.9", features = ["stable-api-compiled-fallback", "global-allocator"] }
+rb-sys = { version = "0.9.130", features = ["stable-api-compiled-fallback", "global-allocator"] }
 
 [build-dependencies]
-rb-sys-env = "0.2.2"
+rb-sys-env = "0.2.3"

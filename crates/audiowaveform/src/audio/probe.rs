@@ -1,67 +1,95 @@
-//! Guards around Symphonia 0.5's optional ADTS estimator and WAV mask repair.
-//! Register before the default readers so guards also apply without a format hint,
-//! after metadata tags, and when a container is found beyond the stream start.
+//! Guard Symphonia's WAV mask repair before it can change the channel layout.
+//! Register at the preferred tier so validation also applies without a format
+//! hint, after metadata tags, and beyond the stream start. Symphonia 0.6.1 fixes
+//! the ADTS estimator offset/zero-step bugs guarded here for 0.5.
 
 use std::sync::OnceLock;
 
-use symphonia::core::probe::Probe;
+use symphonia::core::formats::probe::Probe;
 
 pub(super) fn get_probe() -> &'static Probe {
     static PROBE: OnceLock<Probe> = OnceLock::new();
     PROBE.get_or_init(|| {
         let mut probe = Probe::default();
-        register_guards(&mut probe);
+        #[cfg(feature = "format-wav")]
+        probe.register_format_at_tier::<GuardedWavReader<'_>>(
+            symphonia::core::common::Tier::Preferred,
+        );
         symphonia::default::register_enabled_formats(&mut probe);
         probe
     })
 }
 
-fn register_guards(_probe: &mut Probe) {
-    #[cfg(any(feature = "format-aac", feature = "format-m4a", feature = "format-mkv"))]
-    {
-        use std::io::{Seek, SeekFrom};
-        use symphonia::core::formats::FormatReader;
-        use symphonia::core::io::{MediaSourceStream, ReadBytes};
-        use symphonia::core::probe::{Instantiate, QueryDescriptor};
-        use symphonia::default::formats::AdtsReader;
+#[cfg(feature = "format-wav")]
+use wav::GuardedWavReader;
 
-        for descriptor in AdtsReader::query() {
-            let mut descriptor = *descriptor;
-            descriptor.inst = Instantiate::Format(|source, options| {
-                // An ID3 prefix can make the upstream estimator subtract the
-                // start offset twice, underflow or call step_by(0). Unknown byte
-                // length disables only the estimate; we count decoded frames.
-                let position = source.pos();
-                let mut source = MediaSourceStream::new(
-                    Box::new(super::decode::ReadSeekMediaSource::new(source, None)),
-                    Default::default(),
-                );
-                source.seek(SeekFrom::Start(position))?;
-                Ok(Box::new(AdtsReader::try_new(source, options)?))
-            });
-            _probe.register(&descriptor);
+#[cfg(feature = "format-wav")]
+mod wav {
+    use symphonia::core::errors::Result;
+    use symphonia::core::formats::probe::{ProbeFormatData, ProbeableFormat, Score, Scoreable};
+    use symphonia::core::formats::{
+        FormatInfo, FormatOptions, FormatReader, MediaInfo, SeekMode, SeekTo, SeekedTo, Track,
+    };
+    use symphonia::core::io::{MediaSourceStream, ScopedStream};
+    use symphonia::core::meta::Metadata;
+    use symphonia::core::packet::Packet;
+    use symphonia::default::formats::WavReader;
+
+    pub(super) struct GuardedWavReader<'s>(WavReader<'s>);
+
+    impl Scoreable for GuardedWavReader<'_> {
+        fn score(source: ScopedStream<&mut MediaSourceStream<'_>>) -> Result<Score> {
+            WavReader::score(source)
         }
     }
-    #[cfg(feature = "format-wav")]
-    {
-        use symphonia::core::formats::FormatReader;
-        use symphonia::core::probe::{Instantiate, QueryDescriptor};
-        use symphonia::default::formats::WavReader;
 
-        for descriptor in WavReader::query() {
-            let mut descriptor = *descriptor;
-            descriptor.inst = Instantiate::Format(|mut source, options| {
-                validate_wave_layout(&mut source)?;
-                Ok(Box::new(WavReader::try_new(source, options)?))
-            });
-            _probe.register(&descriptor);
+    impl ProbeableFormat<'_> for GuardedWavReader<'_> {
+        fn try_probe_new(
+            mut source: MediaSourceStream<'_>,
+            options: FormatOptions,
+        ) -> Result<Box<dyn FormatReader + '_>> {
+            super::validate_wave_layout(&mut source)?;
+            Ok(Box::new(GuardedWavReader(WavReader::try_new(
+                source, options,
+            )?)))
+        }
+
+        fn probe_data() -> &'static [ProbeFormatData] {
+            WavReader::probe_data()
+        }
+    }
+
+    impl FormatReader for GuardedWavReader<'_> {
+        fn format_info(&self) -> &FormatInfo {
+            self.0.format_info()
+        }
+        fn media_info(&self) -> &MediaInfo {
+            self.0.media_info()
+        }
+        fn metadata(&mut self) -> Metadata<'_> {
+            self.0.metadata()
+        }
+        fn seek(&mut self, mode: SeekMode, to: SeekTo) -> Result<SeekedTo> {
+            self.0.seek(mode, to)
+        }
+        fn tracks(&self) -> &[Track] {
+            self.0.tracks()
+        }
+        fn next_packet(&mut self) -> Result<Option<Packet>> {
+            self.0.next_packet()
+        }
+        fn into_inner<'s>(self: Box<Self>) -> MediaSourceStream<'s>
+        where
+            Self: 's,
+        {
+            Box::new(self.0).into_inner()
         }
     }
 }
 
 #[cfg(feature = "format-wav")]
 fn validate_wave_layout(
-    source: &mut symphonia::core::io::MediaSourceStream,
+    source: &mut symphonia::core::io::MediaSourceStream<'_>,
 ) -> symphonia::core::errors::Result<()> {
     use std::io::{Read, Seek, SeekFrom};
     use symphonia::core::errors::decode_error;

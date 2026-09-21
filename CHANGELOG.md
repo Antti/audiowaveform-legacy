@@ -10,8 +10,11 @@ First Rust library and CLI release, versioned independently from the historical
 C++ releases below. The Rust API is still evolving; `0.x` minor releases may
 contain breaking changes.
 
-- Decode ID3-prefixed ADTS/AAC without invoking Symphonia's unsafe duration
-  estimator, and reject unsupported WAV channel counts and inconsistent masks
+- Update Rust dependencies, including Symphonia 0.6.1, PNG 0.18.1, and rb-sys
+  0.9.130. Preserve waveform quantization and leading-delay handling, reuse one
+  PCM conversion buffer, and retain metadata-aware format detection.
+- Decode ID3-prefixed ADTS/AAC with Symphonia's corrected duration estimator,
+  and reject unsupported WAV channel counts and inconsistent masks
   before demuxing. Retry interrupted encoded reads.
 - Retain known speaker layouts in decoded PCM and WAV transcoding, including
   side-surround and nonstandard mono/stereo positions. Write WAV samples in
